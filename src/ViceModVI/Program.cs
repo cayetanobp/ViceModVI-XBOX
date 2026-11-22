@@ -101,19 +101,36 @@ static int Run(string[] args)
                 status => links.Count(row => row.Link.Status == status)), Links = links });
             return 0;
         }
-        case ["write-pool-copy", var file, var id, var input, var output]:
+        case ["write-pool-copy", var file, var id, var input, var output, .. var options]:
         {
+            if (options.Any(option => option is not ("--overwrite" or "--resize")) || options.Distinct().Count() != options.Length)
+                throw new ArgumentException("Supported pool copy flags are --overwrite and --resize.");
+            if (string.Equals(Path.GetFullPath(output), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase))
+                throw new IOException("Choose a destination separate from the catalog.");
             var catalog = Catalog.Load(file);
-            Print(PoolWriter.Copy(catalog, catalog.Get(id), File.ReadAllBytes(input), output));
-            return 0;
-        }
-        case ["write-pool-copy", var file, var id, var input, var output, "--overwrite"]:
-        {
-            var catalog = Catalog.Load(file);
-            var result = PoolWriter.Copy(catalog, catalog.Get(id), File.ReadAllBytes(input), output,
-                overwriteExisting: true);
+            var result = PoolWriter.Copy(catalog, catalog.Get(id), TextureConversion.Import(input), output,
+                overwriteExisting: options.Contains("--overwrite"), allowResize: options.Contains("--resize"));
             if (result.ReplacedSource) catalog.Save(file, replace: true);
             Print(result);
+            return 0;
+        }
+        case ["convert-for-ttpf", var file, var id, var input, var output, .. var options]
+            when options is [] or ["--resize"]:
+        {
+            var catalog = Catalog.Load(file);
+            var dds = TextureConversion.Import(input);
+            var plan = PoolWriter.Plan(catalog, catalog.Get(id), dds);
+            var prepared = TextureConversion.Apply(dds, plan, allowResize: options.Length == 1);
+            LocalFiles.Write(output, stream => stream.Write(prepared));
+            Print(plan);
+            return 0;
+        }
+        case ["write-rpf-copy", var file, var id, var input, var output, .. var options]
+            when options is [] or ["--resize"]:
+        {
+            var catalog = Catalog.Load(file);
+            Print(RpfCopyWriter.Copy(catalog, catalog.Get(id), TextureConversion.Import(input), output,
+                allowResize: options.Length == 1));
             return 0;
         }
         case ["pool-profiles", var file, var sourceId]:
@@ -149,7 +166,9 @@ static int Run(string[] args)
                 export CATALOG ASSET_ID OUTPUT
                 inspect DDS_OR_OBJ
                 resolve CATALOG [MODEL_ID]
-                write-pool-copy CATALOG TEXTURE_ID DDS OUTPUT_TTPF [--overwrite]
+                convert-for-ttpf CATALOG TEXTURE_ID IMAGE OUTPUT_DDS [--resize]
+                write-pool-copy CATALOG TEXTURE_ID IMAGE OUTPUT_TTPF [--resize] [--overwrite]
+                write-rpf-copy CATALOG TEXTURE_ID IMAGE OUTPUT_RPF [--resize]
                 pool-profiles CATALOG SOURCE_ID
                 """);
             return 2;

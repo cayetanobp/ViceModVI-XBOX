@@ -54,10 +54,7 @@ public sealed class ReplacementProject
     public void Stage(Catalog catalog, Asset asset, string name, byte[] dds)
     {
         if (asset.Type != "texture") throw new InvalidDataException("Select a texture to replace.");
-        var replacement = DdsTextureReader.Inspect(dds);
-        if (replacement.SliceCount != 1 || replacement.Dimension != 1 || replacement.Depth != 1)
-            throw new NotSupportedException("The local viewer accepts a single 2D replacement image.");
-        DdsTextureReader.DecodeTexturePixels(dds);
+        DdsTextureReader.Inspect(dds);
         var staged = new StagedTexture(Identify(catalog, asset), Path.GetFileName(name), dds);
         int index = Replacements.FindIndex(item => item.Target.AssetId == asset.Id);
         if (index >= 0) Replacements[index] = staged;
