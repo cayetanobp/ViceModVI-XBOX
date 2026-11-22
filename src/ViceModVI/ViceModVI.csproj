@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="$(RpfExplorerCore)" />
+    <PackageReference Include="Magick.NET-Q8-AnyCPU" Version="15.1.0" />
   </ItemGroup>
   <Target Name="CheckExplorerCore" BeforeTargets="PrepareForBuild" Condition="!Exists('$(RpfExplorerCore)')">
     <Error Text="rpf9-explorer Core was not found at $(RpfExplorerCore). See the pinned checkout and build commands in README.md." />

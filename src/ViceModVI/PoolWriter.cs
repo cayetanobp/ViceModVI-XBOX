@@ -4,26 +4,61 @@ namespace ViceModVI;
 
 public sealed record PoolWriteResult(int Index, string? NativeKey, int Neighbor, bool NeighborVerified,
     bool ReplacedSource, bool ContentChanged, int ChangedChunks, long ChangedDecodedBytes,
-    long SourceBytes, long DestinationBytes, string Compatibility);
+    long SourceBytes, long DestinationBytes, string Compatibility, TextureConversionPlan Conversion);
 
 public static class PoolWriter
 {
-    public static PoolWriteResult Copy(Catalog catalog, Asset asset, byte[] dds, string output, bool overwriteExisting = false)
+    public static TextureConversionPlan Plan(Catalog catalog, Asset asset, byte[] dds)
+    {
+        var (source, index) = Locate(catalog, asset);
+        using var input = source.Open();
+        source.Fingerprint.Check(source.Path, input, false);
+        var texture = FindTexture(asset, TtpfReader.Inspect(source.Path), index);
+        return Plan(texture, dds);
+    }
+
+    private static TextureConversionPlan Plan(TtpfTextureInfo texture, byte[] dds)
+    {
+        string? limitation = texture.Limitation;
+        if (!texture.SupportsNativeReplacement && limitation is null)
+            limitation = texture.PartialMips
+                ? $"RDS5 entry {texture.Index} exposes {texture.Mips} of {texture.SourceMips} mips starting at mip {texture.BaseMipLevel}. " +
+                  "The writer needs a readable full native mip chain."
+                : $"RDS5 entry {texture.Index} uses a storage layout that the current writer supports only for reading.";
+        if (texture.Dimension != 1 || texture.Depth != 1)
+            limitation ??= "The current RDS5 writer requires a single 2D texture descriptor.";
+        return TextureConversion.Plan(dds, new(texture.Width, texture.Height, texture.DxgiFormat, texture.SourceMips), limitation);
+    }
+
+    private static (Source Source, int Index) Locate(Catalog catalog, Asset asset)
     {
         var source = catalog.SourceOf(asset);
         if (source.Format != "ttpf" || asset.Type != "texture" || asset.Index is not int index)
-            throw new NotSupportedException("The copy writer requires a TTPF texture.");
+            throw new NotSupportedException("Select a TTPF texture for this export.");
+        return (source, index);
+    }
+
+    private static TtpfTextureInfo FindTexture(Asset asset, TtpfInfo pool, int index)
+    {
+        var texture = pool.Textures.Single(item => item.Index == index);
+        if (XboxAssets.Key(texture.AssetKey) != asset.NativeKey)
+            throw new InvalidDataException("Native texture key differs.");
+        return texture;
+    }
+
+    public static PoolWriteResult Copy(Catalog catalog, Asset asset, byte[] dds, string output,
+        bool overwriteExisting = false, bool allowResize = false)
+    {
+        var (source, index) = Locate(catalog, asset);
         output = Path.GetFullPath(output);
         if (Directory.Exists(output)) throw new IOException("The destination is a directory.");
         if (File.Exists(output) && !overwriteExisting)
-            throw new IOException("The destination already exists. Confirm overwrite in the save dialog or choose a new path.");
+            throw new IOException("The destination already exists. Use --overwrite or choose a new path.");
         using (var input = source.Open()) source.Fingerprint.Check(source.Path, input, true);
         var pool = TtpfReader.Inspect(source.Path);
-        var selected = pool.Textures.Single(texture => texture.Index == index);
-        if (XboxAssets.Key(selected.AssetKey) != asset.NativeKey)
-            throw new InvalidDataException("Native texture key differs.");
-        if (!selected.SupportsNativeReplacement)
-            throw new NotSupportedException("This texture storage profile cannot be written.");
+        var selected = FindTexture(asset, pool, index);
+        var conversion = Plan(selected, dds);
+        byte[] prepared = TextureConversion.Apply(dds, conversion, allowResize);
         var neighbor = pool.Textures.Where(texture => texture.Index != index && texture.CanExtract)
             .OrderBy(texture => Math.Abs(texture.Index - index)).FirstOrDefault()
             ?? throw new NotSupportedException("A readable neighboring entry is required to verify the copy.");
@@ -32,13 +67,13 @@ public static class PoolWriter
         string temporary = Path.Combine(Path.GetDirectoryName(output)!, $".vicemodvi-{Guid.NewGuid():N}.ttpf");
         try
         {
-            var result = Rds5TextureWriter.ExportReplacementCopy(source.Path, index, dds, temporary);
+            var result = Rds5TextureWriter.ExportReplacementCopy(source.Path, index, prepared, temporary);
             var reopened = TtpfReader.Inspect(temporary);
             if (reopened.Textures.Count != pool.Textures.Count ||
                 reopened.Textures.Single(texture => texture.Index == index).AssetKey != selected.AssetKey)
                 throw new InvalidDataException("The copy's texture index changed.");
             byte[] actual = TtpfReader.CreateDds(temporary, index);
-            if (!Payload(actual).SequenceEqual(Payload(dds)) ||
+            if (!Payload(actual).SequenceEqual(Payload(prepared)) ||
                 !TtpfReader.CreateDds(temporary, neighbor.Index).AsSpan().SequenceEqual(adjacent))
                 throw new InvalidDataException("Reopened pool failed replacement or neighbor verification.");
             using (var current = source.Open()) source.Fingerprint.Check(source.Path, current, true);
@@ -54,7 +89,7 @@ public static class PoolWriter
             return new(index, asset.NativeKey, neighbor.Index, true, replacedSource,
                 !Payload(actual).SequenceEqual(Payload(original)), result.ChangedChunks,
                 result.ChangedDecodedBytes, result.SourceBytes, result.DestinationBytes,
-                "Pending platform and build verification");
+                "Pending platform and build verification", conversion);
         }
         finally { File.Delete(temporary); }
     }

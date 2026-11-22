@@ -180,7 +180,7 @@ public static class XboxAssets
 
     internal static string? Key(ulong? key) => key is null or 0 ? null : key.Value.ToString("X16");
 
-    private static byte[] DecodeSegments(FileStream file, Asset asset)
+    internal static byte[] DecodeSegments(FileStream file, Asset asset)
     {
         if (asset.Segments is not { Length: > 0 } segments || asset.SystemBytes is not > 0)
             throw new InvalidDataException("A validated segmented resource is required.");

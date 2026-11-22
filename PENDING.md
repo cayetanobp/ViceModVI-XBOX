@@ -9,8 +9,8 @@ Choose a task that can be closed with the listed evidence. Tasks are ordered by 
 | MF-03 | Link materials and textures | MF-01, MF-02 | Completed |
 | MF-04 | Viewer and replacement project | MF-02, MF-03 | Completed |
 | MF-05 | Experimental TTPF copy writer | MF-02 for format validation, MF-04 for integration | Completed |
-| MF-06 | RPF9 writing and change distribution | Native metadata and in-game verification per platform | Blocked |
-| MF-07 | Simplify browsing, previews, exports, and edits | MF-02, MF-03, MF-04 | Pending |
+| MF-06 | RPF9 writing and change distribution | Native metadata and in-game verification per platform | Offline copy verified, Xbox test pending |
+| MF-07 | Simplify browsing, previews, exports, and edits | MF-02, MF-03, MF-04 | Completed |
 | MF-08 | Installation root and incremental global index | MF-01, MF-03 | Pending |
 | MF-09 | Prebuilt index packs by platform and build | MF-08 | Proposed |
 
@@ -46,6 +46,8 @@ Show the catalog, texture preview, mesh and material selection, and per-entry ex
 
 **Evidence.** In the [local replacement workflow](README.md#local-replacement-workflow), the WPF scene applied the 1,024 × 1,024 source image to the reference mesh's shader 1. A 64 × 64 test PNG changed the displayed mesh texture and reported the dimension, DXGI format, and mip differences. The desktop integration check toggled both images, saved and closed the window, and reopened the project with the edited image selected. It verified the persisted native key and confirmed the revert remained saved. All six original SHA-256 values matched before and after.
 
+**Current desktop workflow.** MF-07 replaced the project menus with session edits and DDS export. The **Convert for TTPF export** dialog previews input and output dimensions, DXGI format, and mip counts. It explicitly asks for a decision when resizing is required and leaves the staged DDS available for both preview and export. [Reproduction steps](README.md#local-replacement-workflow)
+
 ## MF-05 · TTPF copy with one replacement
 
 Start with one texture in a readable storage profile. Document the conditions for accepting a replacement. Write a new copy, update the fields required by the profile, and reopen it with a reader. Verify the modified texture and a neighboring entry. Reject profiles unsupported by the writer.
@@ -53,6 +55,8 @@ Start with one texture in a readable storage profile. Document the conditions fo
 **Acceptance.** The copy remains structurally readable, the expected texture can be exported again, and the neighboring entry retains its content. Record in-game compatibility as pending until verified on the exact platform and version.
 
 **Evidence.** In the [experimental copy workflow](README.md#experimental-ttpf-copy), `textures_loose.ttpf` entry 4, key `05929C00601B8338`, accepted a DXGI 98 DDS at 1,024 × 1,024 with all 9 mips. Changing one decoded byte rewrote one chunk and increased the physical size from 21,081,856 to 21,082,112 bytes. A fresh catalog of the copy reopened all 194 descriptors. The re-exported replacement and neighbor 3 matched their expected DDS SHA-256 values. The writer rejected entry 0's partial storage profile and produced no copy. Xbox Series 1.0.2.1 in-game compatibility remains pending.
+
+**Conversion evidence.** Entry 4 passed a compatible DDS through byte for byte. A 1,024 × 1,024 DXGI 91 DDS with one mip was written as a verified DXGI 98 copy with nine mips. The mip-only BC7 case preserved the supplied mip bytes and added eight levels. JPEG, BMP, GIF, TIFF, WebP and TGA fixtures imported as one-level BGRA DDS images. A 64 × 64 PNG required `--resize`. With consent, the reopened TTPF matched all 1,398,096 bytes of the standalone converted DDS payload and passed the neighbor check. Entry 0 reported its three readable mips out of eight and produced no output. [Conversion and copy commands](README.md#experimental-ttpf-copy)
 
 ## MF-06 · RPF9 writing and distribution
 
@@ -64,9 +68,11 @@ Document which RPF9 metadata remains uninterpreted and what a writer needs to pr
 
 An Xbox writer needs the verified member and directory layouts, offsets and lengths, compression and alignment requirements, and any integrity metadata affected by a replacement. It needs a supported way to apply a copy on the target platform. Validation requires reopening a no-change round trip, applying one identifiable replacement to a fresh copy, checking an unaffected entry, and reverting by reapplying the original. Record both archive fingerprints and the exact platform and game build used for the runtime check.
 
+**Offline copy evidence.** A no-change round trip reproduced the 1,295,760,752-byte archive's original SHA-256. A one-pixel edit of `0:dictionary:680010:texture:0` changed one segment at `0x6800B0` and preserved its 36-byte packed length. The output SHA-256 was `17D09D966D0E4DAC63C2865BBEEC56EFBC4C25D362758814D1FAAAA0BF50B180`. The reopened dictionary matched the replacement DDS and its neighbor, and bytes outside that segment matched throughout the copy. Rebuilding the catalog of the copy re-exported the exact DDS. A DDS requiring a different packed length was rejected without producing a copy. [RPF9 copy commands](README.md#experimental-rpf9-copy)
+
 | Platform | Build | Compatibility |
 | --- | --- | --- |
-| Xbox Series | 1.0.2.1 | Pending native writer and a runnable platform test |
+| Xbox Series | 1.0.2.1 | Fixed-size dictionary copy verified offline. Loading and reverting in the game are pending |
 | PS5 | — | Pending a format profile and a platform test |
 | PC | — | Pending a format profile and a platform test |
 
@@ -77,6 +83,8 @@ Start with **Open folder** and **Open file**. Show a tree of installed folders, 
 Selecting an entry opens its preview. A model shows its meshes and materials, with links to confirmed textures in either the same archive or another folder. Put single and batch export in the selection's context menu. For supported textures, use an explicit edit mode with replacement preview, validation, and undo before saving a copy. Keep the existing command-line workflow available.
 
 **Acceptance.** Starting from an installed game, a contributor can navigate to an archive, preview a model, follow a texture reference into a different folder, export the selected assets, and stage and revert a texture edit. Opening or browsing asks for no catalog filename or output directory. Export and save ask for a destination only when they write output. Opening a standalone file remains available without configuring an installation.
+
+**Evidence.** The desktop integration check opened the local Xbox Series 1.0.2.1 sample folder, navigated to `core_restofworld.rpf`, and previewed model `0:model:203F010` using shader 1. **View linked texture** selected the resolved entry in `data/ttdb/props/ttdb_props.ttpf`. Native-key search returned the same entry. The check exercised the two-asset context selection and reopened exported OBJ and DDS files. It staged and reverted an image on a pool entry with a partial native mip chain, then verified the conversion plan on a writable entry and opened its pool as a standalone file. Opening requested no output filename. [Desktop walkthrough](README.md#local-replacement-workflow)
 
 ## MF-08 · Installation root and incremental global index
 

@@ -11,8 +11,6 @@
                 <WrapPanel VerticalAlignment="Center">
                     <Button Content="Open folder" Click="OpenFolder"/>
                     <Button Content="Open file" Click="OpenFile"/>
-                    <Button Content="Open project" Click="OpenProject"/>
-                    <Button x:Name="SaveProjectButton" Content="Save project" Click="SaveProject" IsEnabled="False"/>
                 </WrapPanel>
             </DockPanel>
         </Border>
@@ -30,12 +28,17 @@
                 <ColumnDefinition Width="8"/>
                 <ColumnDefinition Width="*" MinWidth="260"/>
                 <ColumnDefinition Width="8"/>
-                <ColumnDefinition Width="295" MinWidth="240"/>
+                <ColumnDefinition Width="224" MinWidth="192"/>
             </Grid.ColumnDefinitions>
             <Border Background="{StaticResource Paper}" BorderBrush="{StaticResource Line}" BorderThickness="1" Padding="12">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="Assets" FontSize="17" FontWeight="SemiBold"/>
-                    <ComboBox DockPanel.Dock="Top" x:Name="TypeFilter" SelectedIndex="0" Margin="0,10,0,6"
+                    <TreeView DockPanel.Dock="Top" x:Name="SourceTree" MaxHeight="170" MinHeight="62" Margin="0,8,0,4"
+                              AutomationProperties.Name="Source folders and archives" SelectedItemChanged="SelectSource"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+                    <TextBlock DockPanel.Dock="Top" x:Name="ScopePath" Foreground="#415B62" FontSize="11"
+                               TextTrimming="CharacterEllipsis" Margin="0,0,0,5"/>
+                    <ComboBox DockPanel.Dock="Top" x:Name="TypeFilter" SelectedIndex="0" Margin="0,3,0,4"
                               AutomationProperties.Name="Asset type" SelectionChanged="FilterChanged">
                         <ComboBoxItem Content="All assets"/>
                         <ComboBoxItem Content="Models" Tag="model"/>
@@ -46,14 +49,21 @@
                     <TextBlock DockPanel.Dock="Top" Text="Name, source, hash, or offset" Foreground="#415B62" Margin="0,4"/>
                     <TextBox DockPanel.Dock="Top" x:Name="Search" Padding="7" Margin="0,0,0,8"
                              AutomationProperties.Name="Search catalog" TextChanged="FilterChanged"/>
-                    <ListBox x:Name="AssetList" SelectionChanged="SelectAsset" AutomationProperties.Name="Catalog assets"
+                    <ListBox x:Name="AssetList" SelectionChanged="SelectAsset" SelectionMode="Extended"
+                             PreviewMouseRightButtonDown="SelectContextAsset" AutomationProperties.Name="Catalog assets"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListBox.ContextMenu>
+                            <ContextMenu Opened="PrepareExportMenu">
+                                <MenuItem Header="Export selection…" Click="ExportSelection"/>
+                                <MenuItem Header="Export staged DDS…" Click="ExportStaged" Visibility="Collapsed"/>
+                            </ContextMenu>
+                        </ListBox.ContextMenu>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <StackPanel Margin="3,4">
+                                <StackPanel Margin="3,4" ToolTip="{Binding SourcePath}">
                                     <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
-                                    <TextBlock Text="{Binding Type}" FontSize="11" Foreground="#415B62"/>
+                                    <TextBlock Text="{Binding Summary}" FontSize="11" Foreground="#415B62" TextTrimming="CharacterEllipsis"/>
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
@@ -65,7 +75,8 @@
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" x:Name="AssetHeading" Text="Preview" FontSize="20" FontWeight="SemiBold"
                                TextTrimming="CharacterEllipsis" Margin="0,0,0,10"/>
-                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,12,0,0">
+                    <StackPanel DockPanel.Dock="Bottom" x:Name="CompareControls" Visibility="Collapsed"
+                                Orientation="Horizontal" Margin="0,12,0,0">
                         <RadioButton x:Name="ShowOriginal" GroupName="PreviewMode" Content="Original" IsChecked="True"
                                      Margin="0,0,18,0" Checked="PreviewModeChanged"/>
                         <RadioButton x:Name="ShowReplacement" GroupName="PreviewMode" Content="Replacement"
@@ -83,26 +94,31 @@
                 </DockPanel>
             </Border>
             <GridSplitter Grid.Column="3" Width="8" HorizontalAlignment="Stretch" Background="Transparent"/>
-            <Border Grid.Column="4" Background="{StaticResource Paper}" Padding="14" BorderBrush="{StaticResource Line}" BorderThickness="1">
+            <Border Grid.Column="4" Background="{StaticResource Paper}" Padding="11" BorderBrush="{StaticResource Line}" BorderThickness="1">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel>
-                        <TextBlock Text="Inspector" FontSize="17" FontWeight="SemiBold"/>
-                        <TextBlock x:Name="AssetDetails" TextWrapping="Wrap" Margin="0,8"/>
+                        <TextBlock Text="Inspector" FontSize="16" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="AssetDetails" Foreground="#415B62" FontSize="11" TextWrapping="Wrap" Margin="0,6"/>
                         <StackPanel x:Name="MeshControls" Visibility="Collapsed">
-                            <TextBlock Text="Mesh" Margin="0,5"/>
+                            <TextBlock Text="Mesh" FontSize="11" Margin="0,3"/>
                             <ComboBox x:Name="Meshes" AutomationProperties.Name="Mesh" SelectionChanged="SelectMesh"/>
-                            <TextBlock Text="Material" Margin="0,9,0,5"/>
+                            <TextBlock Text="Material" FontSize="11" Margin="0,7,0,3"/>
                             <ComboBox x:Name="Materials" AutomationProperties.Name="Material" SelectionChanged="SelectMaterial"/>
-                            <TextBlock x:Name="LinkDetails" TextWrapping="Wrap" Margin="0,8"/>
-                            <Button x:Name="ShowLinked" Content="View linked texture" Click="ViewLinkedTexture" IsEnabled="False" Margin="0,0,0,8"/>
+                            <TextBlock x:Name="LinkDetails" TextWrapping="Wrap" FontSize="11" Margin="0,6"/>
+                            <Button x:Name="ShowLinked" Content="View linked texture" Click="ViewLinkedTexture"
+                                    Visibility="Collapsed" Margin="0,0,0,5" Padding="6"/>
                         </StackPanel>
-                        <Image x:Name="TextureSwatch" MaxHeight="135" Stretch="Uniform" Margin="0,5,0,0"/>
-                        <TextBlock x:Name="TextureDetails" TextWrapping="Wrap" Margin="0,8"/>
-                        <Button x:Name="ExportAssetButton" Content="Export selected asset" Click="ExportAsset" IsEnabled="False" Margin="0,0,0,6"/>
-                        <Button x:Name="ExportTextureButton" Content="Export texture" Click="ExportTexture" IsEnabled="False" Margin="0,0,0,6"/>
-                        <Button x:Name="ImportButton" Content="Import texture replacement" Click="ImportReplacement" IsEnabled="False" Margin="0,0,0,6"/>
-                        <Button x:Name="RevertButton" Content="Revert texture replacement" Click="RevertReplacement" IsEnabled="False" Margin="0,0,0,6"/>
-                        <Button x:Name="WritePoolButton" Content="Write experimental TTPF copy" Click="WritePoolCopy" IsEnabled="False" Margin="0"/>
+                        <TextBlock x:Name="TextureDetails" TextWrapping="Wrap" FontSize="11" Margin="0,5"/>
+                        <Expander x:Name="EditPanel" Header="Edit texture" Visibility="Collapsed" Margin="0,4,0,0">
+                            <StackPanel Margin="0,5,0,0">
+                                <Button Content="Import replacement…" Click="ImportReplacement" Margin="0,0,0,5" Padding="6"/>
+                                <TextBlock x:Name="EditDetails" TextWrapping="Wrap" FontSize="11" Margin="0,3,0,6" Foreground="#415B62"/>
+                                <Button x:Name="ConvertButton" Content="Convert for TTPF export…" Click="ConvertForPool"
+                                        Visibility="Collapsed" Margin="0,0,0,5" Padding="6"/>
+                                <Button x:Name="RevertButton" Content="Revert replacement" Click="RevertReplacement"
+                                        Visibility="Collapsed" Margin="0" Padding="6"/>
+                            </StackPanel>
+                        </Expander>
                     </StackPanel>
                 </ScrollViewer>
             </Border>
