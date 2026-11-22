@@ -1,0 +1,24 @@
+<Application x:Class="ViceModVI.Desktop.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <SolidColorBrush x:Key="Ink" Color="#182D36"/>
+        <SolidColorBrush x:Key="Paper" Color="#F8FAF9"/>
+        <SolidColorBrush x:Key="Line" Color="#CFD9D7"/>
+        <SolidColorBrush x:Key="Teal" Color="#123E40"/>
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="12,7"/>
+            <Setter Property="Margin" Value="0,0,7,0"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+            <Setter Property="Background" Value="{StaticResource Paper}"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="MinHeight" Value="32"/>
+        </Style>
+    </Application.Resources>
+</Application>

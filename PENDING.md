@@ -1,54 +1,74 @@
-# Trabajo pendiente
+# Pending work
 
-Selecciona una tarea que puedas cerrar con la evidencia indicada. Las tareas están ordenadas por dependencia. El equipo puede preparar exportadores y pruebas de formatos en paralelo mientras se acuerdan los contratos de catálogo y referencias.
+Choose a task that can be closed with the listed evidence. Tasks are ordered by dependency. The team can prepare exporters and format tests in parallel while agreeing on the catalog and reference contracts.
 
-| ID | Tarea | Depende de | Estado |
+| ID | Task | Depends on | Status |
 | --- | --- | --- | --- |
-| MF-01 | Catálogo y lectura por offset | - | Pendiente |
-| MF-02 | Identificación y exportación de modelos y texturas | MF-01 para la integración | Pendiente |
-| MF-03 | Relación entre materiales y texturas | MF-01, MF-02 | Pendiente |
-| MF-04 | Visor y proyecto de reemplazos | MF-02, MF-03 | Pendiente |
-| MF-05 | Escritura experimental en copia TTPF | MF-02 para validar formato, MF-04 para integrar | Pendiente |
-| MF-06 | Escritura RPF9 y distribución de cambios | Evidencia propia por formato y plataforma | Investigación |
+| MF-01 | Catalog and byte-offset reads | — | Completed |
+| MF-02 | Identify and export models and textures | MF-01 for integration | Completed |
+| MF-03 | Link materials and textures | MF-01, MF-02 | Completed |
+| MF-04 | Viewer and replacement project | MF-02, MF-03 | Completed |
+| MF-05 | Experimental TTPF copy writer | MF-02 for format validation, MF-04 for integration | Completed |
+| MF-06 | RPF9 writing and change distribution | Native metadata and in-game verification per platform | Blocked |
 
-## MF-01 · Catálogo y lectura por offset
+## MF-01 · Catalog and byte-offset reads
 
-Importar un TSV de RPF y manifiestos con nombres, tipos y localizadores. Usar como muestra un inventario de `core_restofworld.rpf`. Separar el rango de bytes de la identidad del recurso. Para un RPF, guardar el contenedor, offset, longitud y segmentos cuando existan. Para un TTPF, guardar el contenedor, la clave nativa y el índice local cuando esté disponible. Asociar el catálogo a una huella comprobable del archivo. Filtrar por origen, tipo, nombre o hash.
+Import an RPF inventory TSV and manifests containing names, types, and locators. Use an inventory of `core_restofworld.rpf` as the sample. Separate the byte range from asset identity. For an RPF, retain the container, offset, length, and any segments. For a TTPF, retain the container, native key, and local index when available. Bind the catalog to a verifiable fingerprint of the file. Support filtering by source, type, name, or hash.
 
-**Se da por hecha cuando** una segunda apertura puede recuperar una entrada usando el catálogo guardado sin volver a escanear el contenedor. Registrar bytes leídos para la operación y probar el rechazo de un rango fuera de archivo o de un catálogo que corresponda a otra copia.
+**Acceptance.** A second open can retrieve an entry from the saved catalog without rescanning the container. Record the bytes read for the operation and show that an out-of-file range and a catalog belonging to a different copy are rejected.
 
-## MF-02 · Identificar y exportar
+**Evidence.** On Xbox Series build 1.0.2.1, Leonida's inventory yielded 2,381 stored ranges, tracked separately from 37 models, 145 dictionaries, and 847 indexed textures across the RPF and five pools. The Leonida manifests matched 37/37 model and 194/194 TTPF locators. A second process reading `0:range:4010` transferred 162 payload bytes and 32,768 fingerprint bytes from the 1,295,760,752-byte RPF. Moving that locator to EOF or pointing the read at a different container returned an error and produced no output. An alternate synthetic source with the same length and modification time failed the full SHA-256 check. Full SHA-256 verification matched all six real sources against Leonida's build profile. [Catalog reproduction](README.md#reproduce-the-sample)
 
-Conectar lectores existentes a entradas del catálogo. Comparar la salida con manifiestos existentes. Validar el tipo con la estructura del recurso. Conservar `desconocido` cuando solo haya un bloque zlib o falle la validación. Para texturas, registrar dimensiones, formato, mips fuente y mips exportados. Para modelos, registrar mallas, materiales y localizadores. Exponer la lectura individual en una interfaz reutilizable por el visor.
+## MF-02 · Identify and export
 
-**Se da por hecha cuando** se puede exportar una textura y una malla de referencia a partir del catálogo, reabrir cada salida y comprobar dimensiones y mips disponibles, o recuento de vértices y caras, respectivamente. La evidencia debe identificar el decodificador usado y distinguir salidas completas de parciales.
+Connect existing readers to catalog entries. Compare the output with existing manifests. Validate the type from the asset's structure. Retain `unknown` when only a zlib block is available or validation fails. For textures, record dimensions, format, source mips, and exported mips. For models, record meshes, materials, and locators. Expose per-entry reading through an interface the viewer can reuse.
 
-## MF-03 · Resolver materiales y texturas
+**Acceptance.** Export a reference texture and mesh from the catalog. Reopen each output and verify texture dimensions and available mips, or vertex and face counts for the mesh. Identify the decoder used and distinguish complete outputs from partial ones.
 
-Partir de una malla ya exportada. Usar las referencias del material y contrastar con texturas embebidas, diccionarios RPF y pools TTPF. Conservar los identificadores completos, su procedencia y la evidencia que justifica cada vínculo. Un mismo hash puede dar varios candidatos. Cuando falte una referencia suficiente, mostrar los candidatos y el motivo de la incertidumbre.
+**Evidence.** `RageModelDecoder` exported `0:model:203F010` with 24 vertices, 12 triangles, two meshes, and two source materials. Reopening the OBJ gave the same vertex, triangle, and mesh counts as the Leonida manifest. OBJ covers static geometry and UVs. `TtpfReader` exported `3:ttpf:0` as a 512 × 512 DXGI 71 DDS with 3 of 8 source mips. The reopened header matched the TTPF manifest. The OBJ and DDS both matched Leonida's `rpf9dump` exports byte for byte. Both decoders use the same pinned rpf9-explorer Core revision. [Setup instructions](README.md#build)
 
-**Se da por hecha cuando** se puede seleccionar el material de una malla de referencia y llegar a su textura difusa con una asociación reproducible. Añadir un caso ambiguo que no se resuelva automáticamente. Medir vínculos confirmados, ambiguos y sin resolver por separado.
+## MF-03 · Resolve materials and textures
 
-## MF-04 · Visor y proyecto local
+Start with an exported mesh. Use material references and check embedded textures, RPF dictionaries, and TTPF pools. Preserve full identifiers, provenance, and evidence for every link. A hash may have multiple candidates. When the reference evidence is insufficient, show the candidates and explain the uncertainty.
 
-Mostrar catálogo, previsualización de textura, selección de malla y material, y exportación individual. Aceptar un reemplazo, indicar diferencias de dimensiones, formato y mips cuando proceda, permitir comparar antes y después y guardar ese estado fuera del archivo fuente. Registrar la identidad de la entrada que se reemplaza.
+**Acceptance.** Select the material of a reference mesh and reach its diffuse texture through a reproducible association. Include an ambiguous case that remains unresolved. Measure confirmed, ambiguous, and unresolved links separately.
 
-**Se da por hecha cuando** un segundo colaborador puede abrir la muestra, editar una textura, verla sobre el modelo, cerrar y reabrir el proyecto, y revertir el cambio. Comprobar las huellas de los archivos originales antes y después del flujo.
+**Evidence.** Shader 1 on `0:model:203F010` uses `diffusetex` (parameter `C8E8C282`). Its 64-bit key `6B455BAEAE3DA9F4` matches entry 90 in `ttdb_props.ttpf`. Across 101 recognized color references, 23 were confirmed, zero ambiguous, and 78 unresolved. Adding a local duplicate of the props pool returned two candidates for the reference shader and left its selected texture empty. See [sample commands](README.md#reproduce-the-sample).
 
-## MF-05 · Copia TTPF con un reemplazo
+## MF-04 · Viewer and local project
 
-Comenzar con una textura y un perfil de almacenamiento ya legible. Documentar las condiciones para aceptar el reemplazo. Escribir en una copia nueva, actualizar los campos que requiera el perfil y volver a abrirla con un lector. Verificar la textura modificada y una entrada vecina. Rechazar perfiles sin soporte en el escritor.
+Show the catalog, texture preview, mesh and material selection, and per-entry export. Accept a replacement and report differences in dimensions, format, and mips as applicable. Support before-and-after comparison and save the state outside the source file. Record the identity of the replaced entry.
 
-**Se da por hecha cuando** la copia conserva una estructura legible, se puede volver a exportar la textura esperada y la entrada vecina conserva su contenido. Registrar la compatibilidad en juego como pendiente hasta tener una comprobación en la plataforma y versión exactas.
+**Acceptance.** A second contributor can open the sample, edit a texture, see it on the model, close and reopen the project, and revert the change. Check the original files' fingerprints before and after the workflow.
 
-## MF-06 · Escritura RPF9 y distribución
+**Evidence.** In the [local replacement workflow](README.md#local-replacement-workflow), the WPF scene applied the 1,024 × 1,024 source image to the reference mesh's shader 1. A 64 × 64 test PNG changed the displayed mesh texture and reported the dimension, DXGI format, and mip differences. The desktop integration check toggled both images, saved and closed the window, and reopened the project with the edited image selected. It verified the persisted native key and confirmed the revert remained saved. All six original SHA-256 values matched before and after.
 
-Documentar qué metadatos de RPF9 quedan sin interpretar y qué necesita un escritor para producir una copia válida. Diseñar los paquetes de reemplazos cuando se sepa qué mecanismo de aplicación admite la plataforma.
+## MF-05 · TTPF copy with one replacement
 
-**Se da por hecha por plataforma** cuando se puede aplicar y revertir un cambio reproducible sobre una copia y comprobar que el juego lee el resultado. Cada plataforma debe tener su propia prueba y registro de compatibilidad.
+Start with one texture in a readable storage profile. Document the conditions for accepting a replacement. Write a new copy, update the fields required by the profile, and reopen it with a reader. Verify the modified texture and a neighboring entry. Reject profiles unsupported by the writer.
 
-## Cómo declarar progreso
+**Acceptance.** The copy remains structurally readable, the expected texture can be exported again, and the neighboring entry retains its content. Record in-game compatibility as pending until verified on the exact platform and version.
 
-Actualiza el estado de la tarea en el mismo cambio que aporta evidencia. Indica la versión de la muestra, el comando o los pasos y el resultado esperado y observado. Usa recuentos con denominador y unidad: recursos detectados, modelos decodificados y referencias resueltas son medidas distintas. Los bytes escaneados no se contabilizan como nombres, rutas ni recursos recuperados.
+**Evidence.** In the [experimental copy workflow](README.md#experimental-ttpf-copy), `textures_loose.ttpf` entry 4, key `05929C00601B8338`, accepted a DXGI 98 DDS at 1,024 × 1,024 with all 9 mips. Changing one decoded byte rewrote one chunk and increased the physical size from 21,081,856 to 21,082,112 bytes. A fresh catalog of the copy reopened all 194 descriptors. The re-exported replacement and neighbor 3 matched their expected DDS SHA-256 values. The writer rejected entry 0's partial storage profile and produced no copy. Xbox Series 1.0.2.1 in-game compatibility remains pending.
 
-[Visión del proyecto](README.md) · [Guía de contribución](CONTRIBUTING.md)
+## MF-06 · RPF9 writing and distribution
+
+Document which RPF9 metadata remains uninterpreted and what a writer needs to produce a valid copy. Design replacement packages once the platform's supported application mechanism is known.
+
+**Acceptance per platform.** Apply and revert a reproducible change on a copy and verify that the game reads the result. Each platform requires its own test and compatibility record.
+
+**Research evidence.** The Xbox Series 1.0.2.1 sample has a root `9FPR` header and five observed nested headers. The root table spans `0x40–0xAA0` with its end excluded. The words at `0x08` and `0x0C` delimit internal regions whose record layouts remain unverified. The root word at `0x24` is 39, while the five observed nested headers and the recovered payload counts give different totals. Resource recovery locates zlib segments and reconstructs validated assets. The original path and member records, archive nesting rules, and integrity fields remain unresolved. The external Core reader likewise reports an undecoded native directory. [Pinned rpf9-explorer source](https://github.com/breadbbbb/rpf9-explorer/tree/48557ead00601d3757ba12b894f2595c4faad2a5/Core)
+
+An Xbox writer needs the verified member and directory layouts, offsets and lengths, compression and alignment requirements, and any integrity metadata affected by a replacement. It needs a supported way to apply a copy on the target platform. Validation requires reopening a no-change round trip, applying one identifiable replacement to a fresh copy, checking an unaffected entry, and reverting by reapplying the original. Record both archive fingerprints and the exact platform and game build used for the runtime check.
+
+| Platform | Build | Compatibility |
+| --- | --- | --- |
+| Xbox Series | 1.0.2.1 | Pending native writer and a runnable platform test |
+| PS5 | — | Pending a format profile and a platform test |
+| PC | — | Pending a format profile and a platform test |
+
+## Reporting progress
+
+Update task status in the same change that provides evidence. State the sample version, reproduction command or steps, and expected and observed results. Give counts with denominators and units. Detected assets, decoded models, and resolved references are separate measures. The number of scanned bytes cannot establish the number of recovered names, paths, or assets.
+
+[Project overview](README.md) · [Contribution guide](CONTRIBUTING.md)

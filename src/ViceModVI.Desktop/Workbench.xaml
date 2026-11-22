@@ -1,0 +1,108 @@
+<Window x:Class="ViceModVI.Desktop.Workbench"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ViceModVI for Xbox" Width="1280" Height="830" MinWidth="850" MinHeight="580"
+        Background="#EAF0ED" FontFamily="Segoe UI" FontSize="13" Closing="CloseWindow">
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Background="{StaticResource Teal}" Padding="20,14">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Left" VerticalAlignment="Center" Foreground="#F8FAF9" FontSize="24"
+                           FontWeight="DemiBold" Margin="0,0,28,0" Text="ViceModVI for Xbox"/>
+                <WrapPanel VerticalAlignment="Center">
+                    <Button Content="Index folder" Click="IndexFolder"/>
+                    <Button Content="Index files" Click="IndexFiles"/>
+                    <Button Content="Open catalog" Click="OpenCatalog"/>
+                    <Button Content="Open project" Click="OpenProject"/>
+                    <Button x:Name="SaveProjectButton" Content="Save project" Click="SaveProject" IsEnabled="False"/>
+                </WrapPanel>
+            </DockPanel>
+        </Border>
+        <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="20,10">
+            <TextBlock x:Name="StatusLine" Text="Open a catalog or index a folder of Xbox Series assets." TextWrapping="Wrap"
+                       AutomationProperties.LiveSetting="Polite"/>
+        </Border>
+        <Grid Margin="14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="285" MinWidth="190"/>
+                <ColumnDefinition Width="8"/>
+                <ColumnDefinition Width="*" MinWidth="260"/>
+                <ColumnDefinition Width="8"/>
+                <ColumnDefinition Width="295" MinWidth="240"/>
+            </Grid.ColumnDefinitions>
+            <Border Background="{StaticResource Paper}" BorderBrush="{StaticResource Line}" BorderThickness="1" Padding="12">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="Catalog" FontSize="17" FontWeight="SemiBold"/>
+                    <ComboBox DockPanel.Dock="Top" x:Name="TypeFilter" SelectedIndex="0" Margin="0,10,0,6"
+                              AutomationProperties.Name="Asset type" SelectionChanged="FilterChanged">
+                        <ComboBoxItem Content="All assets"/>
+                        <ComboBoxItem Content="Models" Tag="model"/>
+                        <ComboBoxItem Content="Textures" Tag="texture"/>
+                        <ComboBoxItem Content="Dictionaries" Tag="dictionary"/>
+                        <ComboBoxItem Content="Unknown ranges" Tag="unknown"/>
+                    </ComboBox>
+                    <TextBlock DockPanel.Dock="Top" Text="Name, source, hash, or offset" Foreground="#415B62" Margin="0,4"/>
+                    <TextBox DockPanel.Dock="Top" x:Name="Search" Padding="7" Margin="0,0,0,8"
+                             AutomationProperties.Name="Search catalog" TextChanged="FilterChanged"/>
+                    <ListBox x:Name="AssetList" SelectionChanged="SelectAsset" AutomationProperties.Name="Catalog assets"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="3,4">
+                                    <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
+                                    <TextBlock Text="{Binding Type}" FontSize="11" Foreground="#415B62"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+            <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" Background="Transparent"/>
+            <Border Grid.Column="2" Background="#DCE8E9" BorderBrush="{StaticResource Line}" BorderThickness="1" Padding="14">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" x:Name="AssetHeading" Text="Preview" FontSize="20" FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis" Margin="0,0,0,10"/>
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,12,0,0">
+                        <RadioButton x:Name="ShowOriginal" GroupName="PreviewMode" Content="Original" IsChecked="True"
+                                     Margin="0,0,18,0" Checked="PreviewModeChanged"/>
+                        <RadioButton x:Name="ShowReplacement" GroupName="PreviewMode" Content="Replacement"
+                                     IsEnabled="False" Checked="PreviewModeChanged"/>
+                    </StackPanel>
+                    <Grid ClipToBounds="True" Background="#C9DCDD">
+                        <TextBlock x:Name="EmptyPreview" Text="Select a model or texture" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <Image x:Name="TextureImage" Stretch="Uniform" Visibility="Collapsed" Margin="12"/>
+                        <Viewport3D x:Name="Viewport" Visibility="Collapsed" MouseLeftButtonDown="OrbitStart"
+                                    MouseLeftButtonUp="OrbitEnd" MouseMove="OrbitMove" MouseWheel="Zoom">
+                            <Viewport3D.Camera><PerspectiveCamera x:Name="Camera" FieldOfView="40"/></Viewport3D.Camera>
+                            <ModelVisual3D x:Name="ModelScene"/>
+                        </Viewport3D>
+                    </Grid>
+                </DockPanel>
+            </Border>
+            <GridSplitter Grid.Column="3" Width="8" HorizontalAlignment="Stretch" Background="Transparent"/>
+            <Border Grid.Column="4" Background="{StaticResource Paper}" Padding="14" BorderBrush="{StaticResource Line}" BorderThickness="1">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock Text="Inspector" FontSize="17" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="AssetDetails" TextWrapping="Wrap" Margin="0,8"/>
+                        <StackPanel x:Name="MeshControls" Visibility="Collapsed">
+                            <TextBlock Text="Mesh" Margin="0,5"/>
+                            <ComboBox x:Name="Meshes" AutomationProperties.Name="Mesh" SelectionChanged="SelectMesh"/>
+                            <TextBlock Text="Material" Margin="0,9,0,5"/>
+                            <ComboBox x:Name="Materials" AutomationProperties.Name="Material" SelectionChanged="SelectMaterial"/>
+                            <TextBlock x:Name="LinkDetails" TextWrapping="Wrap" Margin="0,8"/>
+                            <Button x:Name="ShowLinked" Content="View linked texture" Click="ViewLinkedTexture" IsEnabled="False" Margin="0,0,0,8"/>
+                        </StackPanel>
+                        <Image x:Name="TextureSwatch" MaxHeight="135" Stretch="Uniform" Margin="0,5,0,0"/>
+                        <TextBlock x:Name="TextureDetails" TextWrapping="Wrap" Margin="0,8"/>
+                        <Button x:Name="ExportAssetButton" Content="Export selected asset" Click="ExportAsset" IsEnabled="False" Margin="0,0,0,6"/>
+                        <Button x:Name="ExportTextureButton" Content="Export texture" Click="ExportTexture" IsEnabled="False" Margin="0,0,0,6"/>
+                        <Button x:Name="ImportButton" Content="Import texture replacement" Click="ImportReplacement" IsEnabled="False" Margin="0,0,0,6"/>
+                        <Button x:Name="RevertButton" Content="Revert texture replacement" Click="RevertReplacement" IsEnabled="False" Margin="0,0,0,6"/>
+                        <Button x:Name="WritePoolButton" Content="Write experimental TTPF copy" Click="WritePoolCopy" IsEnabled="False" Margin="0"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+    </DockPanel>
+</Window>

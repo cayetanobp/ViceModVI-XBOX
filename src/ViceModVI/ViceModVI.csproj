@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LocalExplorerCore>$(MSBuildThisFileDirectory)../../.local/rpf9-explorer/Core/RpfPreview.Core.csproj</LocalExplorerCore>
+    <RpfExplorerCore Condition="'$(RpfExplorerCore)' == '' and Exists('$(LocalExplorerCore)')">$(LocalExplorerCore)</RpfExplorerCore>
+    <RpfExplorerCore Condition="'$(RpfExplorerCore)' == ''">$(MSBuildThisFileDirectory)../../../Leonida/third_party/rpf9-explorer/Core/RpfPreview.Core.csproj</RpfExplorerCore>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(RpfExplorerCore)" />
+  </ItemGroup>
+  <Target Name="CheckExplorerCore" BeforeTargets="PrepareForBuild" Condition="!Exists('$(RpfExplorerCore)')">
+    <Error Text="rpf9-explorer Core was not found at $(RpfExplorerCore). See the pinned checkout and build commands in README.md." />
+  </Target>
+</Project>

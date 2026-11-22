@@ -1,42 +1,42 @@
-# Contribuir a ViceModVI
+# Contributing to ViceModVI
 
-La unidad de trabajo es una tarea `MF-XX` de [PENDING.md](PENDING.md). Cada contribución incluye lo necesario para que otra persona la revise y reproduzca sin consultar al autor.
+The unit of work is an `MF-XX` task in [PENDING.md](PENDING.md). Each contribution includes what another person needs to review and reproduce it independently.
 
-## Preparar el entorno
+## Set up the environment
 
-1. Trabaja desde una copia local del repo y elige una tarea con las dependencias que necesites. El alcance inicial está en [README.md](README.md).
-2. Guarda los contenedores de muestra y los resultados de análisis fuera del repo. Para las pruebas automatizables usa muestras sintéticas pequeñas con un resultado conocido. Comprueba los casos reales con una copia a la que tengas acceso.
-3. Para el primer caso real, usa un `core_restofworld.rpf` de Xbox Series y su `index.tsv` si lo tienes. Para relaciones entre archivos añade el TTPF de la textura que estés comprobando. Pasa todas las rutas mediante argumentos o configuración local.
-4. Cuando una tarea introduzca el primer ejecutable o biblioteca de su área, deja documentados en el mismo cambio las dependencias y el comando exacto para compilar y reproducir el ejemplo. El proyecto arranca con documentación y la herramienta de compilación se fija junto a la primera implementación que la requiera.
+1. Work from a local copy of the repository and choose a task whose dependencies are available. See [README.md](README.md) for the initial scope.
+2. Keep sample containers and analysis outputs outside the repository. Use small synthetic fixtures with known results for automated tests. Validate real cases with a copy you can access.
+3. For the first real case, use an Xbox Series `core_restofworld.rpf` and its `index.tsv` if available. For cross-file relationships, add the TTPF containing the texture being checked. Pass all paths through arguments or local configuration.
+4. When a task introduces the first executable or library in its area, document the dependencies and the exact build and reproduction commands in the same change. The project starts with documentation. Choose the build tool with the first implementation that needs it.
 
-## Implementar
+## Implement
 
-- Para catálogo o lectores, comprueba primero qué campos ya aportan nuestros TSV y qué campos están en los manifiestos de exportación disponibles. Reutiliza esas salidas con un importador o una interfaz sencilla antes de implementar otro escáner.
-- Declara el origen de cada dato. Conserva offset, longitud, identificador nativo y tipo de evidencia cuando estén disponibles. Etiqueta los alias y las asociaciones candidatas. Conserva identificadores de 64 bits como cadenas hexadecimales en JSON para evitar pérdidas de precisión en clientes que usan números de coma flotante.
-- Para edición, conserva el original como entrada de solo lectura y escribe los reemplazos en el proyecto o en una copia nueva. Incluye en la evidencia qué ocurre al reabrir esa copia.
-- Si incorporas código de terceros, comprueba su licencia antes de mezclarlo con el proyecto y conserva las atribuciones y avisos exigidos. Para interoperar con herramientas externas, documenta la versión, el formato de entrada y la interfaz utilizada.
-- Mantén la lógica de formatos de Xbox en su backend. Coloca las funciones compartidas de catálogo, proyecto y vista en código independiente de la plataforma. Documenta el perfil y versión que probaste.
+- For the catalog and readers, first check which fields the TSV inventories already supply and which fields the available export manifests contain. Reuse those outputs through an importer or a simple interface before implementing another scanner.
+- Record the provenance of each value. Retain the offset, length, native identifier, and evidence type when available. Label aliases and candidate associations. Store 64-bit identifiers as hexadecimal strings in JSON to avoid precision loss in clients using floating-point numbers.
+- For editing, keep the source read-only and write replacements to the project or to a new copy. Include what happens when that copy is reopened in the evidence.
+- When incorporating third-party code, check the license before combining it with the project and retain required attributions and notices. When interoperating with external tools, document their version, input format, and interface.
+- Keep Xbox format logic in its backend. Put shared catalog, project, and view functionality in platform-independent code. Document the profile and version tested.
 
-## Entregar un cambio que se pueda revisar
+## Submit a reviewable change
 
-Si usas Git, crea una rama identificable, por ejemplo `mf-03-material-textura`. Referencia la tarea en el PR y copia esta plantilla en la descripción.
+If using Git, use a recognizable branch name such as `mf-03-material-texture`. Reference the task in the PR and copy this template into the description.
 
 ```markdown
-Tarea: MF-XX
-Qué cambia:
-Entrada: plataforma, versión, nombre y huella de la muestra si está disponible
-Reproducción: herramientas, versiones y comando o pasos completos
-Resultado esperado:
-Resultado observado:
-Cómo se midió: recuentos, casos positivos y casos rechazados o ambiguos
-Límites pendientes:
+Task: MF-XX
+Changes:
+Input: platform, version, sample name, and fingerprint if available
+Reproduction: tools, versions, and complete command or steps
+Expected result:
+Observed result:
+Measurement: counts, positive cases, and rejected or ambiguous cases
+Remaining limitations:
 ```
 
-Usa ejemplos y rutas relativas que otra persona pueda adaptar. Para muestras de juego, adjunta solo métricas, pasos y salidas de diagnóstico que se puedan compartir. Mantén fuera del repositorio los RPF, TTPF, ejecutables, claves, recursos extraídos, catálogos generados con datos del juego y resultados binarios locales.
+Use examples and relative paths that others can adapt. For game samples, attach only shareable metrics, steps, and diagnostic output. Keep RPF and TTPF files, executables, keys, extracted assets, generated game catalogs, and local binary results outside version control.
 
-## Revisar y cerrar
+## Review and close
 
-1. Comprueba los criterios de aceptación de la tarea con su reproducción documentada.
-2. Revisa un caso positivo y, si aplica, un rango inválido, un formato sin soporte o una relación ambigua.
-3. Para exportación o escritura, vuelve a abrir el archivo generado y registra qué campos o contenido cotejaste. Distingue la lectura desde el visor de una prueba dentro del juego.
-4. Actualiza la tarea y documenta los casos pendientes que podrían cambiar el resultado. Si surge trabajo independiente, añádelo a [PENDING.md](PENDING.md) con su evidencia esperada.
+1. Check the task acceptance criteria using its documented reproduction steps.
+2. Review a positive case and, where applicable, an invalid range, unsupported format, or ambiguous relationship.
+3. After exporting or writing a file, reopen it and record the fields or content compared. Distinguish viewer reads from in-game tests.
+4. Update the task and document open cases that could change the result. If independent work comes up, add it to [PENDING.md](PENDING.md) with the expected evidence.
