@@ -1,8 +1,30 @@
 diff --git a/01-rpf-decompressor-deserializer/src/rpf9.rs b/01-rpf-decompressor-deserializer/src/rpf9.rs
-index fc59abf..5fbd722 100644
+index fc59abf..83c439a 100644
 --- a/01-rpf-decompressor-deserializer/src/rpf9.rs
 +++ b/01-rpf-decompressor-deserializer/src/rpf9.rs
-@@ -57,8 +57,16 @@ impl Header {
+@@ -37,13 +37,15 @@ impl Header {
+             word_0c: word(12),
+             word_24: word(36),
+         };
++        // `word_04` ends the header's table in every archive seen. `word_08`
++        // and `word_0c` are not ordered against it: `word_0c` exceeds it in
++        // levels.rpf (0x1d2e0 > 0x1b070), core_bvh4.rpf (0x11bf0 > 0xfe00)
++        // and 29 nested headers of audio.rpf, story000.rpf and core_bvh4.rpf,
++        // whose tables still end at `word_04` and carry the constant block at
++        // +0x40. Only alignment and size are checked.
++        let words = [header.word_04, header.word_08, header.word_0c];
+         if u64::from(header.word_04) > remaining
+-            || header.word_04 <= header.word_08
+-            || header.word_08 < header.word_0c
+-            || header.word_0c < HEADER_LEN as u32
+-            || header.word_0c % 16 != 0
+-            || header.word_08 % 16 != 0
+-            || header.word_04 % 16 != 0
++            || words.iter().any(|&w| w < HEADER_LEN as u32 || w % 16 != 0)
+         {
+             return None;
+         }
+@@ -57,8 +59,16 @@ impl Header {
  /// does not determine the extent or name of an archive. The file index remains
  /// opaque, and this function never decompresses or extracts content.
  pub fn inspect(
@@ -19,7 +41,7 @@ index fc59abf..5fbd722 100644
  ) -> io::Result<()> {
      let len = input.seek(SeekFrom::End(0))?;
      input.seek(SeekFrom::Start(0))?;
-@@ -81,6 +89,9 @@ pub fn inspect(
+@@ -81,6 +91,9 @@ pub fn inspect(
              }
          }
          offset += read_len as u64;
@@ -29,7 +51,7 @@ index fc59abf..5fbd722 100644
      }
      Ok(())
  }
-@@ -117,12 +128,21 @@ pub fn scan_zlib(
+@@ -117,12 +130,21 @@ pub fn scan_zlib(
      input: &mut (impl Read + Seek),
      mut on_member: impl FnMut(ZlibMember, &[u8]) -> io::Result<()>,
  ) -> io::Result<()> {
@@ -52,7 +74,7 @@ index fc59abf..5fbd722 100644
  ) -> io::Result<()> {
      let length = validate_root(input)?;
      let mut window = vec![0; STREAM_WINDOW + MAX_STORED_MEMBER + MEMBER_ALIGNMENT as usize];
-@@ -144,6 +164,9 @@ fn scan_zlib_inner<T: Read + Seek>(
+@@ -144,15 +166,31 @@ fn scan_zlib_inner<T: Read + Seek>(
              }
          }
          window_offset = scan_end;
@@ -62,7 +84,51 @@ index fc59abf..5fbd722 100644
      }
      Ok(())
  }
-@@ -188,8 +211,16 @@ pub fn read_zlib_sequence(
+ 
+ /// Reconstructs a candidate object from a known start through its first
+ /// short decoded chunk, requiring checksum-valid members and zero padding.
++/// Stops at 16 MiB; see [`read_zlib_sequence_limited`] for larger objects.
+ pub fn read_zlib_sequence(
++    input: &mut (impl Read + Seek),
++    offset: u64,
++) -> io::Result<(Vec<u8>, usize)> {
++    read_zlib_sequence_limited(input, offset, MAX_PSO_LEN)
++}
++
++/// [`read_zlib_sequence`] with the decoded size capped at `max_len` bytes.
++/// Callers that already know an object's length, such as an inventory
++/// entry, pass it so objects above 16 MiB (audio banks reach about 19 MiB)
++/// can be read while memory stays bounded by what was inventoried.
++pub fn read_zlib_sequence_limited(
+     input: &mut (impl Read + Seek),
+     mut offset: u64,
++    max_len: usize,
+ ) -> io::Result<(Vec<u8>, usize)> {
+     let length = validate_root(input)?;
+     if offset >= length || offset % MEMBER_ALIGNMENT != 0 {
+@@ -162,7 +200,7 @@ pub fn read_zlib_sequence(
+     let mut chunk = vec![0; SCAN_CHUNK_LEN + 1];
+     let mut result = Vec::new();
+     let mut count = 0;
+-    while offset < length && result.len() < MAX_PSO_LEN {
++    while offset < length && result.len() < max_len {
+         input.seek(SeekFrom::Start(offset))?;
+         let available = (length - offset).min(stored.len() as u64) as usize;
+         input.read_exact(&mut stored[..available])?;
+@@ -178,6 +216,12 @@ pub fn read_zlib_sequence(
+         }
+         offset = member.compressed_end.next_multiple_of(MEMBER_ALIGNMENT);
+     }
++    if result.len() >= max_len {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidData,
++            format!("sequence reached the {max_len}-byte limit without a short terminal member"),
++        ));
++    }
+     Err(io::Error::new(io::ErrorKind::InvalidData, "sequence lacks a verified short terminal member"))
+ }
+ 
+@@ -188,8 +232,16 @@ pub fn read_zlib_sequence(
  /// must span the complete decoded object, including its schema and either
  /// the legacy PMAP or the CHKS footer observed with LSCH.
  pub fn recover_psos(
@@ -79,7 +145,7 @@ index fc59abf..5fbd722 100644
  ) -> io::Result<usize> {
      let mut object = Vec::new();
      let mut pending: Option<RecoveredPso> = None;
-@@ -251,7 +282,7 @@ pub fn recover_psos(
+@@ -251,7 +303,7 @@ pub fn recover_psos(
              }
          }
          Ok(())
@@ -88,8 +154,74 @@ index fc59abf..5fbd722 100644
      Ok(count)
  }
  
+@@ -329,6 +381,52 @@ mod tests {
+         assert!(Header::observed_layout(&header, 0, 687).is_none());
+     }
+ 
++    #[test]
++    fn accepts_roots_whose_word_0c_exceeds_word_04() {
++        // levels.rpf, Xbox Series 1.0.2.1: the table ends at word_04 = 0x1b070
++        // although word_0c = 0x1d2e0.
++        let mut header = [0; HEADER_LEN];
++        header[..4].copy_from_slice(b"9FPR");
++        for (field, value) in [(4, 0x1b070u32), (8, 0x15f40), (12, 0x1d2e0), (36, 0x81e)] {
++            header[field..field + 4].copy_from_slice(&value.to_le_bytes());
++        }
++        let parsed = Header::observed_layout(&header, 0, 0x20000).unwrap();
++        assert_eq!((parsed.word_04, parsed.word_0c), (0x1b070, 0x1d2e0));
++        // The table must still fit in the file, and every word stays aligned.
++        assert!(Header::observed_layout(&header, 0, 0x1b06f).is_none());
++        header[12..16].copy_from_slice(&0x1d2e8u32.to_le_bytes());
++        assert!(Header::observed_layout(&header, 0, 0x20000).is_none());
++    }
++
++    #[test]
++    fn sequence_limit_is_set_by_the_caller() {
++        // Three full 64 KiB members and a short terminal one.
++        let mut archive = vec![0; CANDIDATE_ALIGNMENT];
++        archive[..4].copy_from_slice(b"9FPR");
++        for (offset, value) in [(4, 608u32), (8, 576), (12, 128)] {
++            archive[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
++        }
++        let start = archive.len() as u64;
++        let object: Vec<u8> = (0..3 * SCAN_CHUNK_LEN + 100).map(|i| (i * 7 % 251) as u8).collect();
++        for part in object.chunks(SCAN_CHUNK_LEN) {
++            let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
++            encoder.write_all(part).unwrap();
++            archive.extend(encoder.finish().unwrap());
++            archive.resize(archive.len().next_multiple_of(16), 0);
++        }
++        archive.resize(archive.len() + 64, 0);
++
++        let mut input = Cursor::new(&archive);
++        let (bytes, members) = read_zlib_sequence_limited(&mut input, start, object.len()).unwrap();
++        assert_eq!((bytes.len(), members), (object.len(), 4));
++        assert_eq!(bytes, object);
++        assert_eq!(read_zlib_sequence(&mut input, start).unwrap().1, 4, "well under the 16 MiB default");
++
++        let err = read_zlib_sequence_limited(&mut input, start, 2 * SCAN_CHUNK_LEN).unwrap_err();
++        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
++        assert!(err.to_string().contains("limit"), "{err}");
++    }
++
+     #[test]
+     fn recovers_raw_tail_before_next_object() {
+         fn pso(data_size: usize) -> Vec<u8> {
+diff --git a/02-rpf-index-extractor/README.md b/02-rpf-index-extractor/README.md
+index e65670e..83eb96b 100644
+--- a/02-rpf-index-extractor/README.md
++++ b/02-rpf-index-extractor/README.md
+@@ -41,7 +41,7 @@ No se ha intentado descifrarlo. El repositorio no contiene ninguna clave para es
+ | Offset | Observación |
+ |---|---|
+ | `0x04` `word_04` | Fin de la cabecera y su tabla. |
+-| `0x08` `word_08`, `0x0c` `word_0c` | Límites internos de la tabla; `0x40 ≤ word_0c ≤ word_08 < word_04`. |
++| `0x08` `word_08`, `0x0c` `word_0c` | Significado sin verificar; alineados a 16 y ≥ 0x40. En 20 de los 22 RPF de Xbox Series 1.0.2.1 se cumple `word_0c ≤ word_08 < word_04`, pero en `levels.rpf` (0x1d2e0 > 0x1b070) y `core_bvh4.rpf` (0x11bf0 > 0xfe00) `word_0c` supera a `word_04`, aunque la tabla sigue terminando en `word_04`. No son límites internos de la tabla; quizá describan el índice ya descifrado. |
+ | `0x10` (8 bytes) | Distinto en cada cabecera. |
+ | `0x18` | `00 7a 04 00 50 01 00 00` en las 14 cabeceras. |
+ | `0x20` (2 × u16) | El primero varía entre 3 y 7. El segundo vale 1 o 2. |
 diff --git a/02-rpf-index-extractor/src/lib.rs b/02-rpf-index-extractor/src/lib.rs
-index d76afaa..2dff5ab 100644
+index d76afaa..20d1034 100644
 --- a/02-rpf-index-extractor/src/lib.rs
 +++ b/02-rpf-index-extractor/src/lib.rs
 @@ -268,9 +268,11 @@ fn align16(value: u64) -> u64 {
@@ -373,11 +505,54 @@ index d76afaa..2dff5ab 100644
      }
      flush(&mut run);
      Ok(())
+@@ -794,7 +886,9 @@ pub fn extract<R: Read + Seek>(input: &mut R, entry: &Entry, payload: Payload) -
+             found.ok_or_else(|| invalid(format!("PSO at {:#x} no longer recovered", entry.offset)))?
+         }
+         (Payload::Decoded, Evidence::ZlibSequence) => {
+-            let (bytes, members) = rpf9::read_zlib_sequence(input, entry.offset)?;
++            // The inventory already decoded this sequence once, so its length
++            // bounds the read; the 16 MiB default would cut large audio banks.
++            let (bytes, members) = rpf9::read_zlib_sequence_limited(input, entry.offset, entry.decoded_len.max(1))?;
+             if members != entry.chunks {
+                 return Err(invalid(format!("sequence at {:#x}: {members} members, inventory has {}", entry.offset, entry.chunks)));
+             }
 diff --git a/02-rpf-index-extractor/src/tests.rs b/02-rpf-index-extractor/src/tests.rs
-index cc6c452..afe98ae 100644
+index cc6c452..2ba7437 100644
 --- a/02-rpf-index-extractor/src/tests.rs
 +++ b/02-rpf-index-extractor/src/tests.rs
-@@ -290,3 +290,56 @@ fn groups_zero_prefixed_spans_into_families() {
+@@ -149,6 +149,31 @@ fn phase01_scanner_misses_the_large_stream() {
+     assert!(offsets.contains(&0x3000));
+ }
+ 
++/// Issue #2 in ViceModVI-XBOX: `audio.rpf` holds a 305-member sequence
++/// that decodes to about 19 MiB. The inventory accepted it, but extraction
++/// stopped at the 16 MiB default and failed the whole validation.
++#[test]
++fn extracts_sequences_above_16_mib() {
++    let mut archive = vec![0; 0x2000];
++    header(&mut archive, 0, 1);
++    header(&mut archive, 0x1000, 1);
++    let object: Vec<u8> = (0..257 * CHUNK + 1000).map(|i| (i % 253) as u8).collect();
++    assert!(object.len() > 16 * 1024 * 1024);
++    for part in object.chunks(CHUNK) {
++        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
++        encoder.write_all(part).unwrap();
++        archive.extend(encoder.finish().unwrap());
++        archive.resize(archive.len().next_multiple_of(16), 0);
++    }
++    archive.resize(archive.len() + 0x1000, 0);
++
++    let mut input = Cursor::new(&archive);
++    let inv = inventory(&mut input).unwrap();
++    let entry = inv.find(Selector::Offset(0x2000)).unwrap();
++    assert_eq!((entry.evidence, entry.chunks, entry.decoded_len), (Evidence::ZlibSequence, 258, object.len()));
++    assert_eq!(extract(&mut input, entry, Payload::Decoded).unwrap(), object);
++}
++
+ #[test]
+ fn extracts_decoded_and_stored_bytes() {
+     let s = sample();
+@@ -290,3 +315,56 @@ fn groups_zero_prefixed_spans_into_families() {
      extract_all(&mut input, &inv, |e, p, _| { payloads.push((e.evidence, p)); Ok(()) }).unwrap();
      assert!(payloads.iter().all(|&(_, p)| p == Payload::Stored));
  }
@@ -435,7 +610,7 @@ index cc6c452..afe98ae 100644
 +        (span.offset, span.len, span.exact_len));
 +}
 diff --git a/03-format-identifier/src/lib.rs b/03-format-identifier/src/lib.rs
-index 05962d5..de2bf42 100644
+index 05962d5..8ad4c6c 100644
 --- a/03-format-identifier/src/lib.rs
 +++ b/03-format-identifier/src/lib.rs
 @@ -11,7 +11,7 @@ pub mod resource;
@@ -485,20 +660,47 @@ index 05962d5..de2bf42 100644
          let mut bytes = None;
          let (p, decompressed, head) = match e.evidence {
              Evidence::PsoFramed => {
-@@ -235,8 +248,10 @@ pub fn identify<R: Read + Seek>(input: &mut R) -> io::Result<Report> {
+@@ -235,16 +248,30 @@ pub fn identify<R: Read + Seek>(input: &mut R) -> io::Result<Report> {
              Evidence::EncryptedDelimited => (simple(Format::Encrypted, "", Check::None, "content not decoded"), false, Vec::new()),
              Evidence::OpaqueSpan => (simple(Format::Opaque, "", Check::None, "content not decoded"), false, Vec::new()),
              Evidence::ZlibUnterminated => {
 -                let stored = extract(input, e, Payload::Stored)?;
 -                (simple(Format::Unknown, "", Check::None, "zlib sequence without a verified end"), false, stored[..stored.len().min(16)].to_vec())
+-            }
+-            Evidence::ZlibSequence | Evidence::ZlibStream => {
+-                let decoded = extract(input, e, Payload::Decoded)?;
+-                let p = identify_payload(&decoded);
+-                let head = decoded[..decoded.len().min(16)].to_vec();
+-                bytes = Some(decoded);
+-                (p, true, head)
 +                let mut head = vec![0; e.stored_len().min(16) as usize];
 +                input.seek(std::io::SeekFrom::Start(e.offset))?;
 +                input.read_exact(&mut head)?;
 +                (simple(Format::Unknown, "", Check::None, "zlib sequence without a verified end"), false, head)
              }
-             Evidence::ZlibSequence | Evidence::ZlibStream => {
-                 let decoded = extract(input, e, Payload::Decoded)?;
-@@ -275,6 +290,7 @@ pub fn identify<R: Read + Seek>(input: &mut R) -> io::Result<Report> {
++            Evidence::ZlibSequence | Evidence::ZlibStream => match extract(input, e, Payload::Decoded) {
++                Ok(decoded) => {
++                    let p = identify_payload(&decoded);
++                    let head = decoded[..decoded.len().min(16)].to_vec();
++                    bytes = Some(decoded);
++                    (p, true, head)
++                }
++                // One entry that no longer decodes keeps its range as unverified
++                // instead of discarding the whole archive's report; I/O errors
++                // still stop the run.
++                Err(err) if err.kind() == io::ErrorKind::InvalidData => {
++                    let mut head = vec![0; e.stored_len().min(16) as usize];
++                    input.seek(std::io::SeekFrom::Start(e.offset))?;
++                    input.read_exact(&mut head)?;
++                    let detail = format!("not verified at {:#x}: {err}", e.offset);
++                    (simple(Format::Unknown, "", Check::None, detail), false, head)
++                }
++                Err(err) => return Err(err),
++            },
+         };
+         let unknown = p.format == Format::Unknown && bytes.is_some();
+         roots.push(p.root.map(|(root, kind)| RootSlot { root, kind, parts: Vec::new(), virtual_len: e.decoded_len }));
+@@ -275,6 +302,7 @@ pub fn identify<R: Read + Seek>(input: &mut R) -> io::Result<Report> {
              pending = Some(Pending { header: e.header, ordinals: vec![e.ordinal], bytes });
          }
      }
