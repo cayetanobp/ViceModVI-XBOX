@@ -9,17 +9,20 @@
                 <TextBlock DockPanel.Dock="Left" VerticalAlignment="Center" Foreground="#F8FAF9" FontSize="24"
                            FontWeight="DemiBold" Margin="0,0,28,0" Text="ViceModVI for Xbox"/>
                 <WrapPanel VerticalAlignment="Center">
-                    <Button Content="Index folder" Click="IndexFolder"/>
-                    <Button Content="Index files" Click="IndexFiles"/>
-                    <Button Content="Open catalog" Click="OpenCatalog"/>
+                    <Button Content="Open folder" Click="OpenFolder"/>
+                    <Button Content="Open file" Click="OpenFile"/>
                     <Button Content="Open project" Click="OpenProject"/>
                     <Button x:Name="SaveProjectButton" Content="Save project" Click="SaveProject" IsEnabled="False"/>
                 </WrapPanel>
             </DockPanel>
         </Border>
         <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="20,10">
-            <TextBlock x:Name="StatusLine" Text="Open a catalog or index a folder of Xbox Series assets." TextWrapping="Wrap"
-                       AutomationProperties.LiveSetting="Polite"/>
+            <DockPanel>
+                <ProgressBar x:Name="WorkProgress" DockPanel.Dock="Right" Width="160" Height="12"
+                             Margin="16,0,0,0" Visibility="Collapsed"/>
+                <TextBlock x:Name="StatusLine" Text="Open a folder or an Xbox Series RPF or TTPF file." TextWrapping="Wrap"
+                           AutomationProperties.LiveSetting="Polite"/>
+            </DockPanel>
         </Border>
         <Grid Margin="14">
             <Grid.ColumnDefinitions>
@@ -31,7 +34,7 @@
             </Grid.ColumnDefinitions>
             <Border Background="{StaticResource Paper}" BorderBrush="{StaticResource Line}" BorderThickness="1" Padding="12">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="Catalog" FontSize="17" FontWeight="SemiBold"/>
+                    <TextBlock DockPanel.Dock="Top" Text="Assets" FontSize="17" FontWeight="SemiBold"/>
                     <ComboBox DockPanel.Dock="Top" x:Name="TypeFilter" SelectedIndex="0" Margin="0,10,0,6"
                               AutomationProperties.Name="Asset type" SelectionChanged="FilterChanged">
                         <ComboBoxItem Content="All assets"/>

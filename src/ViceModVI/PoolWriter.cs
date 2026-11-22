@@ -2,17 +2,22 @@ using RpfPreview.Core;
 
 namespace ViceModVI;
 
+public sealed record PoolWriteResult(int Index, string? NativeKey, int Neighbor, bool NeighborVerified,
+    bool ReplacedSource, bool ContentChanged, int ChangedChunks, long ChangedDecodedBytes,
+    long SourceBytes, long DestinationBytes, string Compatibility);
+
 public static class PoolWriter
 {
-    public static object Copy(Catalog catalog, Asset asset, byte[] dds, string output)
+    public static PoolWriteResult Copy(Catalog catalog, Asset asset, byte[] dds, string output, bool overwriteExisting = false)
     {
         var source = catalog.SourceOf(asset);
         if (source.Format != "ttpf" || asset.Type != "texture" || asset.Index is not int index)
             throw new NotSupportedException("The copy writer requires a TTPF texture.");
         output = Path.GetFullPath(output);
-        if (File.Exists(output) || Directory.Exists(output)) throw new IOException("Choose a new destination.");
-        using var input = source.Open();
-        source.Fingerprint.Check(source.Path, input, true);
+        if (Directory.Exists(output)) throw new IOException("The destination is a directory.");
+        if (File.Exists(output) && !overwriteExisting)
+            throw new IOException("The destination already exists. Confirm overwrite in the save dialog or choose a new path.");
+        using (var input = source.Open()) source.Fingerprint.Check(source.Path, input, true);
         var pool = TtpfReader.Inspect(source.Path);
         var selected = pool.Textures.Single(texture => texture.Index == index);
         if (XboxAssets.Key(selected.AssetKey) != asset.NativeKey)
@@ -36,15 +41,20 @@ public static class PoolWriter
             if (!Payload(actual).SequenceEqual(Payload(dds)) ||
                 !TtpfReader.CreateDds(temporary, neighbor.Index).AsSpan().SequenceEqual(adjacent))
                 throw new InvalidDataException("Reopened pool failed replacement or neighbor verification.");
-            source.Fingerprint.Check(source.Path, input, true);
-            File.Move(temporary, output);
-            return new
+            using (var current = source.Open()) source.Fingerprint.Check(source.Path, current, true);
+            File.Move(temporary, output, overwriteExisting);
+            bool replacedSource = string.Equals(output, Path.GetFullPath(source.Path), StringComparison.OrdinalIgnoreCase);
+            if (replacedSource)
             {
-                Index = index, asset.NativeKey, Neighbor = neighbor.Index, NeighborVerified = true,
-                ContentChanged = !Payload(actual).SequenceEqual(Payload(original)),
-                result.ChangedChunks, result.ChangedDecodedBytes, result.SourceBytes, result.DestinationBytes,
-                Compatibility = "Pending platform and build verification"
-            };
+                using var current = source.Open();
+                var refreshed = Fingerprint.Create(source.Path, current);
+                int sourceIndex = catalog.Sources.FindIndex(item => item.Id == source.Id);
+                catalog.Sources[sourceIndex] = source with { Fingerprint = refreshed };
+            }
+            return new(index, asset.NativeKey, neighbor.Index, true, replacedSource,
+                !Payload(actual).SequenceEqual(Payload(original)), result.ChangedChunks,
+                result.ChangedDecodedBytes, result.SourceBytes, result.DestinationBytes,
+                "Pending platform and build verification");
         }
         finally { File.Delete(temporary); }
     }

@@ -52,7 +52,23 @@ $cli = (Resolve-Path .local/build/bin/ViceModVI/release/ViceModVI.exe).Path
 $viewer = (Resolve-Path .local/build/bin/ViceModVI.Desktop/release/ViceModVI.Desktop.exe).Path
 ```
 
-The first build restores dependencies from NuGet. Run the viewer with `& $viewer`, or pass a catalog JSON or project `.vmp` path. Use **Index files** or **Index folder** to generate a catalog. Use **Open catalog** to reuse one. The CLI's optional TSV import also adds known stored byte ranges.
+The first build restores dependencies from NuGet. Open an RPF or TTPF with **Open file**, or scan an entire directory with **Open folder**. The status bar names the current archive and shows bytes scanned while discovering candidates, then completed and total entries during validation. Every opening replaces the single `vicemodvi-catalog.json` in the system temporary directory. ViceModVI reuses each source index from its local app data cache if the size, timestamp, and sampled bytes match. Changed sources are scanned again. Closing the window during an open cancels the current read. Completed source indexes are kept for the next open. Use `catalog OUTPUT --fresh INPUT` to measure a scan without the cache. Saved `.vmp` projects include their catalog and can be reopened after that temporary file is replaced. The CLI's optional TSV import also adds known stored byte ranges.
+
+### Expanded model coverage
+
+The model helper uses the inventory and drawable reader from a sibling checkout named `gta6-resource-tools`. Use the pinned source revision and the patch bundled with ViceModVI, which adds indexing progress and bounds memory use on large archives. Apply the patch once to a clean checkout. After building .NET, run these commands from the ViceModVI repo root on Windows with Rust and the MSVC build tools:
+
+```powershell
+git clone https://github.com/cayetanobp/gta6-resource-tools.git ../gta6-resource-tools
+git -C ../gta6-resource-tools checkout --detach 3e6f69cb840112dc7b198f2e23a14520e493dc23
+$readerPatch = (Resolve-Path tools/model-reader/gta6-resource-tools-progress.patch).Path
+git -C ../gta6-resource-tools apply $readerPatch
+cargo build --locked --release --manifest-path tools/model-reader/Cargo.toml --target-dir .local/model-reader
+Copy-Item .local/model-reader/release/vicemodvi-models.exe (Split-Path $viewer)
+Copy-Item .local/model-reader/release/vicemodvi-models.exe (Split-Path $cli)
+```
+
+Package the helper alongside the desktop or CLI executable when publishing. Without it, ViceModVI uses its existing model reader. The helper inventories each RPF first, lists individual drawables, and supplies candidate offsets to the existing readers for compatible resources. It decodes drawable geometry on selection or export. Additional drawables provide static geometry and UVs. For supported material layouts the viewer looks up diffuse textures by their full native key, including textures from TTPF files in the open catalog.
 
 ## Reproduce the sample
 
@@ -96,7 +112,7 @@ PNG export is an 8-bit preview of the selected image, and PNG replacement is sta
 
 ### Experimental TTPF copy
 
-Use `& $cli pool-profiles $catalog 3` to list writable entries in the sample loose pool. The writer requires a supported RDS5 storage profile and a complete 2D DDS chain with matching dimensions, DXGI format, mip count, and supported alpha mode. Choose a fresh path for the output. The writer updates RDS5 chunk locations and padding, reopens the copy, compares the replacement DDS payload and a readable neighboring entry, and verifies the original SHA-256.
+Use `& $cli pool-profiles $catalog 3` to list writable entries in the sample loose pool. The writer requires a supported RDS5 storage profile and a complete 2D DDS chain with matching dimensions, DXGI format, mip count, and supported alpha mode. The viewer enables the button only for a writable profile with a compatible staged DDS and displays why other textures are unavailable. The save dialog can write to a new path or replace an existing file after its overwrite prompt. The CLI refuses an existing destination unless `--overwrite` is supplied. The writer creates and reopens a temporary pool, compares the replacement DDS payload and a readable neighboring entry, checks the source fingerprint, and only then publishes the output. Replacing the source in place refreshes the catalog fingerprint.
 
 ```powershell
 $full = Join-Path $out 'writable.dds'

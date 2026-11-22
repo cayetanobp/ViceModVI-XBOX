@@ -25,6 +25,8 @@ static int Run(string[] args)
             return 0;
         case ["catalog", var output, .. var inputs] when inputs.Length > 0:
         {
+            bool useCache = inputs[0] != "--fresh";
+            if (!useCache) inputs = inputs[1..];
             string? inventory = null;
             if (inputs is ["--inventory", var path, .. var rest])
             {
@@ -35,7 +37,7 @@ static int Run(string[] args)
                 ? Directory.EnumerateFiles(input, "*", SearchOption.AllDirectories)
                     .Where(file => Path.GetExtension(file).ToLowerInvariant() is ".rpf" or ".ttpf")
                     .Order(StringComparer.OrdinalIgnoreCase)
-                : new[] { input }), inventory);
+                : new[] { input }), inventory, useCache: useCache);
             catalog.Save(output);
             Print(catalog.Assets.GroupBy(asset => asset.Type).ToDictionary(group => group.Key, group => group.Count()));
             return 0;
@@ -105,6 +107,15 @@ static int Run(string[] args)
             Print(PoolWriter.Copy(catalog, catalog.Get(id), File.ReadAllBytes(input), output));
             return 0;
         }
+        case ["write-pool-copy", var file, var id, var input, var output, "--overwrite"]:
+        {
+            var catalog = Catalog.Load(file);
+            var result = PoolWriter.Copy(catalog, catalog.Get(id), File.ReadAllBytes(input), output,
+                overwriteExisting: true);
+            if (result.ReplacedSource) catalog.Save(file, replace: true);
+            Print(result);
+            return 0;
+        }
         case ["pool-profiles", var file, var sourceId]:
         {
             var source = Catalog.Load(file).Sources.Single(item => item.Id == sourceId && item.Format == "ttpf");
@@ -130,7 +141,7 @@ static int Run(string[] args)
         default:
             Console.Error.WriteLine("""
                 inventory-tsv LEONIDA_INDEX_JSON INVENTORY_TSV
-                catalog CATALOG [--inventory INVENTORY_TSV] RPF_OR_TTPF_OR_FOLDER ...
+                catalog CATALOG [--fresh] [--inventory INVENTORY_TSV] RPF_OR_TTPF_OR_FOLDER ...
                 import-manifest CATALOG SOURCE_ID MANIFEST_JSON
                 list CATALOG [--source TEXT] [--type TYPE] [--name TEXT] [--hash HEX] [--offset OFFSET]
                 read CATALOG ASSET_ID OUTPUT [ALTERNATE_SOURCE]
@@ -138,7 +149,7 @@ static int Run(string[] args)
                 export CATALOG ASSET_ID OUTPUT
                 inspect DDS_OR_OBJ
                 resolve CATALOG [MODEL_ID]
-                write-pool-copy CATALOG TEXTURE_ID DDS OUTPUT_TTPF
+                write-pool-copy CATALOG TEXTURE_ID DDS OUTPUT_TTPF [--overwrite]
                 pool-profiles CATALOG SOURCE_ID
                 """);
             return 2;

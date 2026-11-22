@@ -10,6 +10,9 @@ Choose a task that can be closed with the listed evidence. Tasks are ordered by 
 | MF-04 | Viewer and replacement project | MF-02, MF-03 | Completed |
 | MF-05 | Experimental TTPF copy writer | MF-02 for format validation, MF-04 for integration | Completed |
 | MF-06 | RPF9 writing and change distribution | Native metadata and in-game verification per platform | Blocked |
+| MF-07 | Simplify browsing, previews, exports, and edits | MF-02, MF-03, MF-04 | Pending |
+| MF-08 | Installation root and incremental global index | MF-01, MF-03 | Pending |
+| MF-09 | Prebuilt index packs by platform and build | MF-08 | Proposed |
 
 ## MF-01 · Catalog and byte-offset reads
 
@@ -66,6 +69,30 @@ An Xbox writer needs the verified member and directory layouts, offsets and leng
 | Xbox Series | 1.0.2.1 | Pending native writer and a runnable platform test |
 | PS5 | — | Pending a format profile and a platform test |
 | PC | — | Pending a format profile and a platform test |
+
+## MF-07 · Browse, preview, export, and edit in one place
+
+Start with **Open folder** and **Open file**. Show a tree of installed folders, archives, and their contents wherever paths are known. Present recovered entries with stable names or offsets when an archive does not expose its directory. Keep the source path visible as the user moves between archives. Add search by name, type, and native key, and show where each match lives.
+
+Selecting an entry opens its preview. A model shows its meshes and materials, with links to confirmed textures in either the same archive or another folder. Put single and batch export in the selection's context menu. For supported textures, use an explicit edit mode with replacement preview, validation, and undo before saving a copy. Keep the existing command-line workflow available.
+
+**Acceptance.** Starting from an installed game, a contributor can navigate to an archive, preview a model, follow a texture reference into a different folder, export the selected assets, and stage and revert a texture edit. Opening or browsing asks for no catalog filename or output directory. Export and save ask for a destination only when they write output. Opening a standalone file remains available without configuring an installation.
+
+## MF-08 · Installation root and incremental global index
+
+Prompt once for the game root when the user sets up an installation. Read its manifest or configuration to identify the platform, package identity, and build. Persist the root and keep its index separate from the temporary catalog used for the folder currently open. The folder sets the view. The installation index supplies cross-folder texture and other dependency lookups.
+
+Build and save the inventory one container at a time. Keep locators for known resources and for unclassified ranges, including relative path, offsets, lengths, and available signatures. Track the versions of inventory and format readers independently so a new reader can revisit candidate ranges without throwing away established model and texture records. Save finished containers atomically, report progress by phase, and resume at the first container that still needs work.
+
+**Acceptance.** Interrupt a first scan and reopen the installation. Finished containers are reused. Opening a subfolder still resolves a model's confirmed texture from a separate folder. Changing one container only invalidates that container. Adding a reader can reclassify candidate ranges in an unchanged container from the saved inventory.
+
+## MF-09 · Import a prebuilt index by platform and build
+
+Prepare optional index packs for verified releases. Key each pack by platform, package identity, build, and index schema. Store relative container paths, locators, reader versions, and reference fingerprints. Keep the packs free of game files and extracted content.
+
+On first setup, look up an index pack from the local manifest. Treat a manifest match as a starting point and check each local container against the pack before relying on offsets. Start with a cheap comparison using file size and sampled bytes. Use a stronger check when a container is suspect and verify the full source fingerprint before a write. Import matching entries, scan containers that are new or differ, and mark missing containers unavailable. An unknown build can still open and build its own index. Track pack provenance and compare results across versions before introducing any cross-version reuse.
+
+**Acceptance.** Use an index pack on a matching build and compare the resulting catalog with a full local scan. Repeat with one changed container, one new container, and one missing container. Record which containers were reused or scanned and compare the time to first usable view against a fresh scan.
 
 ## Reporting progress
 

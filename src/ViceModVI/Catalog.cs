@@ -15,11 +15,30 @@ public sealed record ByteRange(long Offset, long Length, long? DecodedLength = n
 
 public sealed record Fingerprint(long Length, string Sha256, string SamplesSha256, DateTime LastWriteUtc)
 {
-    public static Fingerprint Create(string path, FileStream file)
+    public static Fingerprint Create(string path, FileStream file, Action<long>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         var stamp = File.GetLastWriteTimeUtc(path);
         file.Position = 0;
-        string sha = Convert.ToHexString(SHA256.HashData(file));
+        string sha;
+        if (progress is null && !cancellationToken.CanBeCanceled) sha = Convert.ToHexString(SHA256.HashData(file));
+        else
+        {
+            using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            byte[] buffer = new byte[1024 * 1024];
+            long nextReport = 0;
+            int count;
+            while ((count = file.Read(buffer)) != 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                digest.AppendData(buffer.AsSpan(0, count));
+                if (file.Position < nextReport) continue;
+                progress?.Invoke(file.Position);
+                nextReport = file.Position + 32L * 1024 * 1024;
+            }
+            progress?.Invoke(file.Position);
+            sha = Convert.ToHexString(digest.GetHashAndReset());
+        }
         var sample = Sample(file);
         if (stamp != File.GetLastWriteTimeUtc(path))
             throw new IOException("Source changed while being fingerprinted.");
@@ -74,7 +93,7 @@ public sealed record Source(string Id, string Path, string Format, Fingerprint F
 public sealed record Asset(string Id, string SourceId, string Type, string Name, string NameOrigin,
     string Evidence, ByteRange? Range = null, ByteRange[]? Segments = null, int? SystemBytes = null,
     int? Index = null, string? NativeKey = null, string? NameHash = null, string? ParentId = null,
-    string? ManifestType = null);
+    string? ManifestType = null, string? DrawableLocator = null);
 
 public sealed record ReadMeasurement(string AssetId, long VerificationBytes, long PayloadBytes)
 {
@@ -133,7 +152,7 @@ public sealed class Catalog
         LocalFiles.Save(file, this, replace);
     }
 
-    private void Validate()
+    internal void Validate()
     {
         if (Version != CurrentVersion) throw new InvalidDataException($"Unsupported catalog version {Version}.");
         var sources = Sources.ToDictionary(source => source.Id, StringComparer.Ordinal);

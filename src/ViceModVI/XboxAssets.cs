@@ -8,20 +8,28 @@ public sealed record MeshExport(int Vertices, int Faces, int Meshes, int Materia
 public sealed record TextureExport(int Width, int Height, int DxgiFormat, int SourceWidth, int SourceHeight, int SourceFormat,
     int SourceMips, int ExportedMips, int BaseMip, string Decoder, string Coverage);
 
+public sealed record IndexProgress(string Phase, long Completed, long Total, string Unit);
+
 public static class XboxAssets
 {
     public const string ExplorerRevision = "48557ead00601d3757ba12b894f2595c4faad2a5";
     private const int MaxResourceBytes = 256 * 1024 * 1024;
 
-    public static Catalog Build(IEnumerable<string> files, string? inventory = null)
+    public static Catalog Build(IEnumerable<string> files, string? inventory = null,
+        Action<string, IndexProgress>? progress = null, bool useCache = true,
+        CancellationToken cancellationToken = default)
     {
         var catalog = new Catalog();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string[] paths = files.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         bool imported = false;
-        foreach (string file in files)
+        for (int i = 0; i < paths.Length; i++)
         {
-            string path = Path.GetFullPath(file);
-            if (!seen.Add(path)) continue;
+            cancellationToken.ThrowIfCancellationRequested();
+            string path = paths[i];
+            Action<IndexProgress>? report = progress is null ? null : entry => progress(path, entry);
+            bool cache = useCache && inventory is null;
+            if (cache && SourceCatalogCache.TryRestore(catalog, path)) continue;
+            int firstAsset = catalog.Assets.Count;
             string format = Path.GetExtension(path).ToLowerInvariant() switch
             {
                 ".rpf" => "rpf9",
@@ -33,13 +41,26 @@ public static class XboxAssets
             input.ReadExactly(magic);
             if (!(format == "rpf9" ? magic.SequenceEqual("9FPR"u8) : magic.SequenceEqual("RDS5"u8)))
                 throw new InvalidDataException($"Unexpected {format} signature: {path}");
-            var source = new Source(catalog.Sources.Count.ToString(), path, format, Fingerprint.Create(path, input));
+            long length = input.Length;
+            report?.Invoke(new("Reading source fingerprint", 0, length, "bytes"));
+            var fingerprint = Fingerprint.Create(path, input,
+                report is null ? null : bytes => report(new("Reading source fingerprint", bytes, length, "bytes")), cancellationToken);
+            var source = new Source(catalog.Sources.Count.ToString(), path, format, fingerprint);
             catalog.Sources.Add(source);
             if (format == "ttpf")
             {
-                foreach (var texture in TtpfReader.Inspect(path).Textures)
+                report?.Invoke(new("Reading texture table", 0, 0, "entries"));
+                var textures = TtpfReader.Inspect(path, cancellationToken).Textures;
+                int read = 0;
+                foreach (var texture in textures)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
                     catalog.Assets.Add(new($"{source.Id}:ttpf:{texture.Index}", source.Id, "texture", texture.Name,
                         "alias", "RDS5/ETPF descriptor", Index: texture.Index, NativeKey: Key(texture.AssetKey)));
+                    if (++read % 128 == 0 || read == textures.Count)
+                        report?.Invoke(new("Indexing textures", read, textures.Count, "entries"));
+                }
+                if (cache) SourceCatalogCache.Store(catalog, source, firstAsset);
                 continue;
             }
             IReadOnlyList<long>? offsets = null;
@@ -52,7 +73,10 @@ public static class XboxAssets
                     .Select(row => row.Range!.Offset).ToArray();
                 imported = true;
             }
-            ScanRpf(catalog, source, input, offsets);
+            var drawables = ResourceModels.Available ? ResourceModels.List(source, report, cancellationToken) : null;
+            ScanRpf(catalog, source, input, offsets ?? drawables?.CandidateOffsets, report, cancellationToken);
+            if (drawables is not null) ResourceModels.AddDrawables(catalog, source, firstAsset, drawables.Rows);
+            if (cache) SourceCatalogCache.Store(catalog, source, firstAsset);
         }
         if (inventory is not null && !imported) throw new InvalidDataException("An inventory requires an RPF source.");
         if (catalog.Sources.Count == 0) throw new InvalidDataException("No RPF or TTPF sources found.");
@@ -95,33 +119,48 @@ public static class XboxAssets
         }
     }
 
-    private static void ScanRpf(Catalog catalog, Source source, FileStream file, IReadOnlyList<long>? offsets)
+    private static void ScanRpf(Catalog catalog, Source source, FileStream file, IReadOnlyList<long>? offsets,
+        Action<IndexProgress>? report, CancellationToken cancellationToken)
     {
-        var models = offsets ?? Rpf9ModelRecovery.FindCandidateOffsets(source.Path);
-        var textures = offsets ?? Rpf9TextureRecovery.FindCandidateOffsets(source.Path);
+        if (offsets is null) report?.Invoke(new("Finding model candidates", 0, 0, "entries"));
+        var models = offsets ?? Rpf9ModelRecovery.FindCandidateOffsets(source.Path, cancellationToken: cancellationToken);
+        int completed = 0;
         foreach (var batch in models.Chunk(32))
-        foreach (var entry in Rpf9ModelRecovery.RecoverAtOffsets(source.Path, file.Length, batch))
         {
-            var asset = Locator(source, entry, "model");
-            var raw = DecodeSegments(file, asset);
-            var model = RageModelDecoder.Decode(raw.AsSpan(0, asset.SystemBytes!.Value), raw.AsSpan(asset.SystemBytes.Value));
-            if (model is null) continue;
-            if (!string.IsNullOrWhiteSpace(model.Name)) asset = asset with { Name = model.Name, NameOrigin = "resource" };
-            catalog.Assets.Add(asset);
-            foreach (var t in model.EmbeddedTextures ?? [])
-                catalog.Assets.Add(TextureChild(source, asset, t, "embedded dictionary"));
+            report?.Invoke(new("Validating model candidates", completed, models.Count, "entries"));
+            completed += batch.Length;
+            foreach (var entry in Rpf9ModelRecovery.RecoverAtOffsets(source.Path, file.Length, batch, cancellationToken: cancellationToken))
+            {
+                var asset = Locator(source, entry, "model");
+                var raw = DecodeSegments(file, asset);
+                var model = RageModelDecoder.Decode(raw.AsSpan(0, asset.SystemBytes!.Value), raw.AsSpan(asset.SystemBytes.Value));
+                if (model is null) continue;
+                if (!string.IsNullOrWhiteSpace(model.Name)) asset = asset with { Name = model.Name, NameOrigin = "resource" };
+                catalog.Assets.Add(asset);
+                foreach (var t in model.EmbeddedTextures ?? [])
+                    catalog.Assets.Add(TextureChild(source, asset, t, "embedded dictionary"));
+            }
         }
+        report?.Invoke(new("Validating model candidates", completed, models.Count, "entries"));
+        if (offsets is null) report?.Invoke(new("Finding texture candidates", 0, 0, "entries"));
+        var textures = offsets ?? Rpf9TextureRecovery.FindCandidateOffsets(source.Path, cancellationToken: cancellationToken);
+        completed = 0;
         foreach (var batch in textures.Chunk(32))
-        foreach (var entry in Rpf9TextureRecovery.RecoverAtOffsets(source.Path, file.Length, batch))
         {
-            var asset = Locator(source, entry, "dictionary");
-            var raw = DecodeSegments(file, asset);
-            var dictionary = RageTextureDecoder.Inspect(raw.AsSpan(0, asset.SystemBytes!.Value), raw.AsSpan(asset.SystemBytes.Value));
-            if (dictionary is null) continue;
-            catalog.Assets.Add(asset);
-            foreach (var t in dictionary.Textures)
-                catalog.Assets.Add(TextureChild(source, asset, t, "RPF texture dictionary"));
+            report?.Invoke(new("Validating texture candidates", completed, textures.Count, "entries"));
+            completed += batch.Length;
+            foreach (var entry in Rpf9TextureRecovery.RecoverAtOffsets(source.Path, file.Length, batch, cancellationToken: cancellationToken))
+            {
+                var asset = Locator(source, entry, "dictionary");
+                var raw = DecodeSegments(file, asset);
+                var dictionary = RageTextureDecoder.Inspect(raw.AsSpan(0, asset.SystemBytes!.Value), raw.AsSpan(asset.SystemBytes.Value));
+                if (dictionary is null) continue;
+                catalog.Assets.Add(asset);
+                foreach (var t in dictionary.Textures)
+                    catalog.Assets.Add(TextureChild(source, asset, t, "RPF texture dictionary"));
+            }
         }
+        report?.Invoke(new("Validating texture candidates", completed, textures.Count, "entries"));
     }
 
     private static Asset Locator(Source source, ArchiveEntry entry, string type)
@@ -173,6 +212,7 @@ public static class XboxAssets
         var source = catalog.SourceOf(asset);
         using var file = source.Open();
         source.Fingerprint.Check(source.Path, file, false);
+        if (asset.DrawableLocator is not null) return ResourceModels.Read(source, asset);
         var data = DecodeSegments(file, asset);
         return RageModelDecoder.Decode(data.AsSpan(0, asset.SystemBytes!.Value), data.AsSpan(asset.SystemBytes.Value))
             ?? throw new InvalidDataException("Model structure failed validation.");
@@ -259,6 +299,7 @@ public static class XboxAssets
             writer.Write(obj);
         });
         return new MeshExport(model.Meshes.Sum(mesh => mesh.Positions.Count), model.Meshes.Sum(mesh => mesh.Indices.Count) / 3,
-            model.Meshes.Count, model.Materials?.Count ?? 0, nameof(RageModelDecoder), "static geometry and available UVs");
+            model.Meshes.Count, model.Materials?.Count ?? 0,
+            asset.DrawableLocator is null ? nameof(RageModelDecoder) : "Resource Tools", "static geometry and available UVs");
     }
 }

@@ -26,6 +26,10 @@ public partial class Workbench : Window
     private bool updating;
     private bool dirty;
     private bool busy;
+    private bool closeAfterOpening;
+    private CancellationTokenSource? openingCancellation;
+    private bool poolWriteAvailable;
+    private string? poolWriteLimitation;
     private Point? drag;
     private Point3D center;
     private double distance, yaw, pitch;
@@ -50,11 +54,12 @@ public partial class Workbench : Window
                 });
                 SetWorkspace(loaded.loadedCatalog, loaded.saved, path);
             }
-            else
+            else if (Path.GetExtension(path).Equals(".json", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
             {
                 var loaded = await Task.Run(() => Catalog.Load(path));
                 SetWorkspace(loaded, new() { CatalogPath = path });
             }
+            else await OpenSources(path);
         });
     }
 
@@ -83,46 +88,69 @@ public partial class Workbench : Window
         }
         SaveProjectButton.IsEnabled = true;
         int ranges = loaded.Assets.Count(asset => asset.Type == "unknown");
-        StatusLine.Text = $"{loaded.Assets.Count - ranges:N0} identified entries and {ranges:N0} unknown ranges across {loaded.Sources.Count} sources. " +
+        int models = loaded.Assets.Count(asset => asset.Type == "model");
+        StatusLine.Text = $"{models:N0} models · " +
+            $"{loaded.Assets.Count - ranges:N0} identified entries and {ranges:N0} unknown ranges. " +
             $"{replacementProject.Replacements.Count} staged replacements.";
     }
 
-    private async void IndexFolder(object sender, RoutedEventArgs e)
+    private static string TemporaryCatalog => Path.Combine(Path.GetTempPath(), "vicemodvi-catalog.json");
+
+    private async void OpenFolder(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFolderDialog { Title = "Choose a folder containing Xbox Series RPF or TTPF files" };
-        if (dialog.ShowDialog(this) != true) return;
-        await Index(() => Directory.EnumerateFiles(dialog.FolderName, "*", SearchOption.AllDirectories)
-            .Where(path => Path.GetExtension(path).ToLowerInvariant() is ".rpf" or ".ttpf")
-            .Order(StringComparer.OrdinalIgnoreCase));
+        var dialog = new OpenFolderDialog { Title = "Open Xbox Series asset folder" };
+        if (dialog.ShowDialog(this) == true) await OpenPath(dialog.FolderName);
     }
 
-    private async void IndexFiles(object sender, RoutedEventArgs e)
+    private async void OpenFile(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog { Filter = "Xbox Series sources|*.rpf;*.ttpf", Multiselect = true };
-        if (dialog.ShowDialog(this) == true) await Index(() => dialog.FileNames);
+        var dialog = new OpenFileDialog { Filter = "Xbox Series assets|*.rpf;*.ttpf|RPF archives|*.rpf|TTPF textures|*.ttpf" };
+        if (dialog.ShowDialog(this) == true) await OpenPath(dialog.FileName);
     }
 
-    private async Task Index(Func<IEnumerable<string>> sources)
+    private async Task OpenSources(string path)
     {
-        if (!CanDiscard()) return;
-        var dialog = new SaveFileDialog { Filter = "Catalog JSON|*.json", OverwritePrompt = true };
-        if (dialog.ShowDialog(this) != true) return;
-        await Run("Indexing sources. This may take a moment…", async () =>
+        using var cancellation = new CancellationTokenSource();
+        openingCancellation = cancellation;
+        WorkProgress.Value = 0;
+        WorkProgress.Visibility = Visibility.Visible;
+        WorkProgress.IsIndeterminate = true;
+        var progress = (IProgress<(string Path, IndexProgress Entry)>)new Progress<(string Path, IndexProgress Entry)>(update =>
+        {
+            if (cancellation.IsCancellationRequested || WorkProgress.Visibility != Visibility.Visible) return;
+            var entry = update.Entry;
+            WorkProgress.IsIndeterminate = entry.Total <= 0;
+            WorkProgress.Maximum = Math.Max(1, entry.Total);
+            WorkProgress.Value = entry.Completed;
+            string count = entry.Total <= 0 ? "" : $" · {entry.Completed:N0}/{entry.Total:N0} {entry.Unit}";
+            StatusLine.Text = $"{Path.GetFileName(update.Path)} · {entry.Phase}{count}";
+        });
+        try
         {
             var loaded = await Task.Run(() =>
             {
-                var index = XboxAssets.Build(sources());
-                index.Save(dialog.FileName, replace: true);
-                return index;
+                IEnumerable<string> paths = Directory.Exists(path)
+                    ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
+                        .Where(p => Path.GetExtension(p).ToLowerInvariant() is ".rpf" or ".ttpf")
+                        .Order(StringComparer.OrdinalIgnoreCase)
+                    : [path];
+                var next = XboxAssets.Build(paths, progress: (current, entry) => progress.Report((current, entry)),
+                    cancellationToken: cancellation.Token);
+                cancellation.Token.ThrowIfCancellationRequested();
+                next.Save(TemporaryCatalog, replace: true);
+                return next;
             });
-            SetWorkspace(loaded, new() { CatalogPath = dialog.FileName });
-        });
-    }
-
-    private async void OpenCatalog(object sender, RoutedEventArgs e)
-    {
-        var dialog = new OpenFileDialog { Filter = "Catalog JSON|*.json" };
-        if (dialog.ShowDialog(this) == true) await OpenPath(dialog.FileName);
+            if (!cancellation.IsCancellationRequested) SetWorkspace(loaded, new());
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            StatusLine.Text = "Opening canceled.";
+        }
+        finally
+        {
+            openingCancellation = null;
+            WorkProgress.Visibility = Visibility.Collapsed;
+        }
     }
 
     private async void OpenProject(object sender, RoutedEventArgs e)
@@ -268,6 +296,8 @@ public partial class Workbench : Window
     {
         texture = asset;
         textureInfo = null;
+        poolWriteAvailable = false;
+        poolWriteLimitation = null;
         originalImage = replacementImage = null;
         TextureDetails.Text = "";
         try
@@ -281,13 +311,32 @@ public partial class Workbench : Window
                 if (stage is not null) replacementImage = Bitmap(DdsTextureReader.DecodeTexturePixels(stage.Dds));
                 TextureDetails.Text = $"{info.SourceWidth} × {info.SourceHeight} · DXGI {info.SourceFormat}\n" +
                     $"{info.ExportedMips} of {info.SourceMips} mips available starting at mip {info.BaseMip}.";
+                var source = catalog!.SourceOf(asset);
+                TtpfTextureInfo? poolTexture = null;
+                var writeLimitations = new List<string>();
+                if (source.Format == "ttpf" && asset.Index is int textureIndex)
+                {
+                    poolTexture = TtpfReader.Inspect(source.Path).Textures.Single(item => item.Index == textureIndex);
+                    poolWriteAvailable = poolTexture.SupportsNativeReplacement;
+                    if (!poolWriteAvailable)
+                        writeLimitations.Add(poolTexture.Limitation ??
+                            $"The source has only {poolTexture.Mips} of {poolTexture.SourceMips} mip levels available.");
+                }
                 if (stage is not null)
                 {
                     var differences = ReplacementProject.Compare(info, DdsTextureReader.Inspect(stage.Dds));
                     TextureDetails.Text += $"\n{stage.OriginalFileName}";
                     TextureDetails.Text += differences.Length == 0 ? "\nDimensions, format, and mips match." :
                         string.Concat(differences.Select(field => $"\n{field.Field} {field.Original} → {field.Replacement}"));
+                    if (poolTexture is not null && differences.Length > 0)
+                    {
+                        poolWriteAvailable = false;
+                        writeLimitations.Add("The replacement DDS must match the source dimensions, DXGI format, and full mip chain.");
+                    }
                 }
+                if (writeLimitations.Count > 0) poolWriteLimitation = string.Join(" ", writeLimitations);
+                if (poolWriteLimitation is not null)
+                    TextureDetails.Text += $"\nExperimental TTPF copy unavailable: {poolWriteLimitation}";
             }
         }
         catch (Exception error) when (IsAssetError(error))
@@ -298,7 +347,8 @@ public partial class Workbench : Window
         ImportButton.IsEnabled = originalImage is not null;
         bool staged = asset is not null && project!.Find(asset) is not null;
         RevertButton.IsEnabled = staged;
-        WritePoolButton.IsEnabled = staged && catalog!.SourceOf(asset!).Format == "ttpf";
+        WritePoolButton.IsEnabled = staged && poolWriteAvailable;
+        WritePoolButton.ToolTip = poolWriteLimitation ?? "Writes and verifies a separate TTPF copy.";
         ShowReplacement.IsEnabled = replacementImage is not null;
         if (replacementImage is null) ShowOriginal.IsChecked = true;
         RefreshPreview();
@@ -477,11 +527,20 @@ public partial class Workbench : Window
         if (catalog is null || texture is not { } asset || project?.Find(asset) is not { } stage) return;
         var dialog = new SaveFileDialog { Filter = "Texture pool copy|*.ttpf", OverwritePrompt = true };
         if (dialog.ShowDialog(this) != true) return;
+        var source = catalog.SourceOf(asset);
         await Run("Writing and reopening the TTPF copy…", async () =>
         {
-            await Task.Run(() => PoolWriter.Copy(catalog, asset, stage.Dds, dialog.FileName));
-            StatusLine.Text = "Copy verified with the texture reader. In-game compatibility is pending.";
-        });
+            var result = await Task.Run(() => PoolWriter.Copy(catalog, asset, stage.Dds, dialog.FileName,
+                overwriteExisting: true));
+            if (result.ReplacedSource)
+            {
+                await Task.Run(() => catalog.Save(project!.CatalogPath ?? TemporaryCatalog, replace: true));
+                project.RebaseSource(catalog, source.Id);
+                dirty = true;
+                StatusLine.Text = "Source TTPF replaced and catalog refreshed. Save the project to keep it; in-game compatibility is pending.";
+            }
+            else StatusLine.Text = "Copy created and verified with the texture reader. In-game compatibility is pending.";
+        }, showErrors: true);
     }
 
     private static BitmapSource Bitmap(RageTexturePixels pixels) =>
@@ -508,15 +567,28 @@ public partial class Workbench : Window
         return XboxAssets.CreatePreviewDds(new(bitmap.PixelWidth, bitmap.PixelHeight, bytes));
     }
 
-    private async Task Run(string message, Func<Task> work)
+    private async Task Run(string message, Func<Task> work, bool showErrors = false)
     {
         if (busy) return;
         busy = true;
-        IsEnabled = false;
+        if (Content is UIElement workspace) workspace.IsEnabled = false;
         StatusLine.Text = message;
         try { await work(); }
-        catch (Exception error) when (IsAssetError(error)) { StatusLine.Text = error.Message; }
-        finally { IsEnabled = true; busy = false; }
+        catch (Exception error) when (IsAssetError(error))
+        {
+            StatusLine.Text = error.Message;
+            if (showErrors) MessageBox.Show(this, error.Message, "TTPF copy not written", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            if (Content is UIElement workSurface) workSurface.IsEnabled = true;
+            busy = false;
+            if (closeAfterOpening)
+            {
+                closeAfterOpening = false;
+                _ = Dispatcher.BeginInvoke(new Action(Close));
+            }
+        }
     }
 
     private static bool IsAssetError(Exception error) => error is IOException or InvalidDataException or
@@ -526,5 +598,18 @@ public partial class Workbench : Window
     private bool CanDiscard() => !dirty || MessageBox.Show(this, "Discard unsaved project changes?",
         "ViceModVI", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes;
 
-    private void CloseWindow(object? sender, CancelEventArgs e) => e.Cancel = busy || !CanDiscard();
+    private void CloseWindow(object? sender, CancelEventArgs e)
+    {
+        if (!busy)
+        {
+            e.Cancel = !CanDiscard();
+            return;
+        }
+
+        e.Cancel = true;
+        if (openingCancellation is not { } cancellation || closeAfterOpening) return;
+        closeAfterOpening = true;
+        StatusLine.Text = "Canceling the current read…";
+        cancellation.Cancel();
+    }
 }
