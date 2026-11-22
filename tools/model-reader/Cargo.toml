@@ -1,0 +1,10 @@
+[package]
+name = "vicemodvi-models"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+rpf9-models = { path = "../../../gta6-resource-tools/04-resource-readers/models" }
+rpf9-identify = { path = "../../../gta6-resource-tools/03-format-identifier" }
+rpf9-index = { path = "../../../gta6-resource-tools/02-rpf-index-extractor" }

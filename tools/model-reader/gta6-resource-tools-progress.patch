@@ -1,0 +1,508 @@
+diff --git a/01-rpf-decompressor-deserializer/src/rpf9.rs b/01-rpf-decompressor-deserializer/src/rpf9.rs
+index fc59abf..5fbd722 100644
+--- a/01-rpf-decompressor-deserializer/src/rpf9.rs
++++ b/01-rpf-decompressor-deserializer/src/rpf9.rs
+@@ -57,8 +57,16 @@ impl Header {
+ /// does not determine the extent or name of an archive. The file index remains
+ /// opaque, and this function never decompresses or extracts content.
+ pub fn inspect(
++    input: &mut (impl Read + Seek),
++    on_header: impl FnMut(Header),
++) -> io::Result<()> {
++    inspect_with_progress(input, on_header, |_, _| {})
++}
++
++pub fn inspect_with_progress(
+     input: &mut (impl Read + Seek),
+     mut on_header: impl FnMut(Header),
++    mut progress: impl FnMut(u64, u64),
+ ) -> io::Result<()> {
+     let len = input.seek(SeekFrom::End(0))?;
+     input.seek(SeekFrom::Start(0))?;
+@@ -81,6 +89,9 @@ pub fn inspect(
+             }
+         }
+         offset += read_len as u64;
++        if offset == len || offset.is_multiple_of(32 * 1024 * 1024) {
++            progress(offset, len);
++        }
+     }
+     Ok(())
+ }
+@@ -117,12 +128,21 @@ pub fn scan_zlib(
+     input: &mut (impl Read + Seek),
+     mut on_member: impl FnMut(ZlibMember, &[u8]) -> io::Result<()>,
+ ) -> io::Result<()> {
+-    scan_zlib_inner(input, |_, member, bytes| on_member(member, bytes))
++    scan_zlib_with_progress(input, &mut on_member, |_, _| {})
++}
++
++pub fn scan_zlib_with_progress(
++    input: &mut (impl Read + Seek),
++    mut on_member: impl FnMut(ZlibMember, &[u8]) -> io::Result<()>,
++    progress: impl FnMut(u64, u64),
++) -> io::Result<()> {
++    scan_zlib_inner(input, |_, member, bytes| on_member(member, bytes), progress)
+ }
+ 
+ fn scan_zlib_inner<T: Read + Seek>(
+     input: &mut T,
+     mut on_member: impl FnMut(&mut T, ZlibMember, &[u8]) -> io::Result<()>,
++    mut progress: impl FnMut(u64, u64),
+ ) -> io::Result<()> {
+     let length = validate_root(input)?;
+     let mut window = vec![0; STREAM_WINDOW + MAX_STORED_MEMBER + MEMBER_ALIGNMENT as usize];
+@@ -144,6 +164,9 @@ fn scan_zlib_inner<T: Read + Seek>(
+             }
+         }
+         window_offset = scan_end;
++        if window_offset == length || window_offset % (32 * STREAM_WINDOW as u64) == 0 {
++            progress(window_offset, length);
++        }
+     }
+     Ok(())
+ }
+@@ -188,8 +211,16 @@ pub fn read_zlib_sequence(
+ /// must span the complete decoded object, including its schema and either
+ /// the legacy PMAP or the CHKS footer observed with LSCH.
+ pub fn recover_psos(
++    input: &mut (impl Read + Seek),
++    on_pso: impl FnMut(RecoveredPso, &[u8]) -> io::Result<()>,
++) -> io::Result<usize> {
++    recover_psos_with_progress(input, on_pso, |_, _| {})
++}
++
++pub fn recover_psos_with_progress(
+     input: &mut (impl Read + Seek),
+     mut on_pso: impl FnMut(RecoveredPso, &[u8]) -> io::Result<()>,
++    progress: impl FnMut(u64, u64),
+ ) -> io::Result<usize> {
+     let mut object = Vec::new();
+     let mut pending: Option<RecoveredPso> = None;
+@@ -251,7 +282,7 @@ pub fn recover_psos(
+             }
+         }
+         Ok(())
+-    })?;
++    }, progress)?;
+     Ok(count)
+ }
+ 
+diff --git a/02-rpf-index-extractor/src/lib.rs b/02-rpf-index-extractor/src/lib.rs
+index d76afaa..2dff5ab 100644
+--- a/02-rpf-index-extractor/src/lib.rs
++++ b/02-rpf-index-extractor/src/lib.rs
+@@ -268,9 +268,11 @@ fn align16(value: u64) -> u64 {
+     value.next_multiple_of(ALIGN)
+ }
+ 
+-fn read_headers<R: Read + Seek>(input: &mut R, file_len: u64) -> io::Result<Vec<HeaderInfo>> {
++fn read_headers<R: Read + Seek>(
++    input: &mut R, file_len: u64, progress: impl FnMut(u64, u64),
++) -> io::Result<Vec<HeaderInfo>> {
+     let mut found = Vec::new();
+-    rpf9::inspect(input, |h| found.push(h))?;
++    rpf9::inspect_with_progress(input, |h| found.push(h), progress)?;
+     let mut headers = Vec::with_capacity(found.len());
+     for (id, h) in found.iter().enumerate() {
+         let mut raw = [0; HEADER_LEN];
+@@ -315,18 +317,27 @@ struct OpenSequence {
+ /// entries are split, and each span is added as an `EncryptedDelimited` or
+ /// `OpaqueSpan` entry.
+ pub fn inventory<R: Read + Seek>(input: &mut R) -> io::Result<Inventory> {
++    inventory_with_progress(input, |_, _, _| {})
++}
++
++pub fn inventory_with_progress<R: Read + Seek>(
++    input: &mut R, mut progress: impl FnMut(&'static str, u64, u64),
++) -> io::Result<Inventory> {
+     let file_len = input.seek(SeekFrom::End(0))?;
+-    let headers = read_headers(input, file_len)?;
++    progress("Scanning archive headers", 0, file_len);
++    let headers = read_headers(input, file_len, |done, total|
++        progress("Scanning archive headers", done, total))?;
+ 
+     let mut entries = Vec::new();
+-    rpf9::recover_psos(input, |p, _| {
++    progress("Scanning PSO blocks", 0, file_len);
++    rpf9::recover_psos_with_progress(input, |p, _| {
+         entries.push(Entry {
+             ordinal: 0, header: 0, offset: p.offset, stored_end: p.compressed_end,
+             decoded_len: p.decoded_len, chunks: p.chunks,
+             evidence: Evidence::PsoFramed, signature: "PSIN",
+         });
+         Ok(())
+-    })?;
++    }, |done, total| progress("Scanning PSO blocks", done, total))?;
+     let pso_extents: Vec<(u64, u64)> = entries.iter().map(|e| (e.offset, e.stored_end)).collect();
+     let inside_pso = |offset: u64| {
+         let i = pso_extents.partition_point(|&(start, _)| start <= offset);
+@@ -342,7 +353,8 @@ pub fn inventory<R: Read + Seek>(input: &mut R) -> io::Result<Inventory> {
+             signature: seq.signature,
+         });
+     };
+-    rpf9::scan_zlib(input, |member, bytes| {
++    progress("Scanning compressed blocks", 0, file_len);
++    rpf9::scan_zlib_with_progress(input, |member, bytes| {
+         if inside_pso(member.offset) {
+             return Ok(());
+         }
+@@ -373,21 +385,25 @@ pub fn inventory<R: Read + Seek>(input: &mut R) -> io::Result<Inventory> {
+             close(current.take().unwrap(), &mut entries);
+         }
+         Ok(())
+-    })?;
++    }, |done, total| progress("Scanning compressed blocks", done, total))?;
+     if let Some(seq) = current.take() {
+         close(seq, &mut entries);
+     }
+ 
+     let mut entries = assign(entries, &headers);
+-    let mut unclaimed = all_unclaimed(input, &headers, &entries)?;
+-    let streams = find_framed(input, &headers, &entries, &unclaimed)?;
++    let mut unclaimed = all_unclaimed(input, &headers, &entries,
++        |done, total| progress("Finding unclaimed ranges", done, total))?;
++    let streams = find_framed(input, &headers, &entries, &unclaimed,
++        |done, total| progress("Checking remaining ranges", done, total))?;
+     if !streams.is_empty() {
+         entries.extend(streams);
+         entries = assign(entries, &headers);
+-        unclaimed = all_unclaimed(input, &headers, &entries)?;
++        unclaimed = all_unclaimed(input, &headers, &entries,
++            |done, total| progress("Updating unclaimed ranges", done, total))?;
+     }
+     let families = families(&unclaimed);
+-    let unclaimed = split_embedded(input, unclaimed, &families)?;
++    let unclaimed = split_embedded(input, unclaimed, &families,
++        |done, total| progress("Splitting embedded ranges", done, total))?;
+     entries.extend(unclaimed.iter().map(|span| {
+         let offset = span.offset - if span.zero_prefix { ALIGN } else { 0 };
+         let stored_end = span.offset + span.len;
+@@ -416,6 +432,11 @@ fn families(spans: &[Span]) -> BTreeMap<[u8; FAMILY_PREFIX], usize> {
+     counts
+ }
+ 
++const MAX_SPLITS_PER_SPAN: usize = 65_536;
++const MAX_EMBEDDED_SPLITS: usize = 262_144;
++
++// A repeating byte pattern is weak evidence. Retain the original span if
++// accepting its inferred boundaries would exceed either metadata budget.
+ /// Splits family spans where a 16-byte zero block is followed by a block that
+ /// starts with a family prefix: an entry stored right after the previous one
+ /// instead of at the next page.
+@@ -423,38 +444,73 @@ fn split_embedded<R: Read + Seek>(
+     input: &mut R,
+     spans: Vec<Span>,
+     families: &BTreeMap<[u8; FAMILY_PREFIX], usize>,
++    mut progress: impl FnMut(u64, u64),
+ ) -> io::Result<Vec<Span>> {
+     let prefixes: BTreeSet<_> = families.keys().copied().collect();
++    let total = spans.iter().filter(|span| span.zero_prefix &&
++        span.family().is_some_and(|f| prefixes.contains(&f))).map(|span| span.len).sum();
++    let mut meter = ByteProgress::new(total, &mut progress);
++    let mut done = 0;
++    let mut buffer = vec![0; 1 << 20];
+     let mut out = Vec::with_capacity(spans.len());
+-    for span in spans {
++    let mut split_budget = MAX_EMBEDDED_SPLITS;
++    'spans: for span in spans {
+         if !(span.zero_prefix && span.family().is_some_and(|f| prefixes.contains(&f))) {
+             out.push(span);
+             continue;
+         }
+-        let mut bytes = vec![0; span.len as usize];
++        let start = out.len();
++        if split_budget == 0 {
++            done += span.len;
++            meter.report(done);
++            out.push(span);
++            continue;
++        }
+         input.seek(SeekFrom::Start(span.offset))?;
+-        input.read_exact(&mut bytes)?;
+-        let block = ALIGN as usize;
+-        let mut starts = vec![0];
+-        for i in (2 * block..bytes.len()).step_by(block) {
+-            let zero_before = bytes[i - block..i].iter().all(|&b| b == 0);
+-            if zero_before && prefixes.contains(&[bytes[i], bytes.get(i + 1).copied().unwrap_or(0)]) {
+-                starts.push(i);
++        let mut remaining = span.len;
++        let mut position = span.offset;
++        let mut piece = Span {
++            header: span.header, offset: span.offset, len: 0,
++            head: Vec::new(), zero_prefix: true, exact_len: 0,
++        };
++        let mut zero_before = false;
++        while remaining > 0 {
++            let count = remaining.min(buffer.len() as u64) as usize;
++            input.read_exact(&mut buffer[..count])?;
++            for block in buffer[..count].chunks(ALIGN as usize) {
++                if position - span.offset >= 2 * ALIGN && zero_before &&
++                    prefixes.contains(&[block[0], block.get(1).copied().unwrap_or(0)]) {
++                    if out.len() - start >= split_budget.min(MAX_SPLITS_PER_SPAN) {
++                        out.truncate(start);
++                        done += remaining;
++                        meter.report(done);
++                        out.push(span);
++                        continue 'spans;
++                    }
++                    let next = Span {
++                        header: span.header, offset: position, len: 0,
++                        head: Vec::new(), zero_prefix: true, exact_len: 0,
++                    };
++                    piece.len = align16(piece.exact_len);
++                    out.push(std::mem::replace(&mut piece, next));
++                }
++                if position == piece.offset {
++                    piece.head.extend_from_slice(&block[..block.len().min(8)]);
++                }
++                let last = block.iter().rposition(|&byte| byte != 0);
++                if let Some(last) = last {
++                    piece.exact_len = position - piece.offset + last as u64 + 1;
++                }
++                zero_before = last.is_none();
++                position += block.len() as u64;
+             }
++            remaining -= count as u64;
++            done += count as u64;
++            meter.report(done);
+         }
+-        starts.push(bytes.len());
+-        for pair in starts.windows(2) {
+-            let piece = &bytes[pair[0]..pair[1]];
+-            let exact = piece.iter().rposition(|&b| b != 0).map_or(0, |p| p + 1) as u64;
+-            out.push(Span {
+-                header: span.header,
+-                offset: span.offset + pair[0] as u64,
+-                len: align16(exact),
+-                head: piece[..piece.len().min(8)].to_vec(),
+-                zero_prefix: true,
+-                exact_len: exact,
+-            });
+-        }
++        split_budget -= out.len() - start;
++        piece.len = align16(piece.exact_len);
++        out.push(piece);
+     }
+     Ok(out)
+ }
+@@ -489,12 +545,40 @@ fn check(headers: &[HeaderInfo], entries: &[Entry]) -> Vec<String> {
+     issues
+ }
+ 
+-fn all_unclaimed<R: Read + Seek>(input: &mut R, headers: &[HeaderInfo], entries: &[Entry]) -> io::Result<Vec<Span>> {
++struct ByteProgress<F> {
++    total: u64,
++    next: u64,
++    callback: F,
++}
++
++impl<F: FnMut(u64, u64)> ByteProgress<F> {
++    fn new(total: u64, mut callback: F) -> Self {
++        callback(0, total);
++        Self { total, next: 32 * 1024 * 1024, callback }
++    }
++
++    fn report(&mut self, done: u64) {
++        if self.next != u64::MAX && (done >= self.next || done == self.total) {
++            (self.callback)(done, self.total);
++            self.next = if done == self.total { u64::MAX } else { done + 32 * 1024 * 1024 };
++        }
++    }
++}
++
++fn all_unclaimed<R: Read + Seek>(
++    input: &mut R, headers: &[HeaderInfo], entries: &[Entry], progress: impl FnMut(u64, u64),
++) -> io::Result<Vec<Span>> {
++    let total = headers.iter().map(|h| h.region_end.saturating_sub(h.index_end)).sum();
++    let mut meter = ByteProgress::new(total, progress);
++    let mut done = 0;
+     let mut unclaimed = Vec::new();
+     for h in headers {
+         let claimed: Vec<(u64, u64)> = entries.iter().filter(|e| e.header == h.id)
+             .map(|e| (e.offset, align16(e.stored_end))).collect();
+-        unclaimed_spans(input, h, &claimed, &mut unclaimed)?;
++        unclaimed_spans(input, h, &claimed, &mut unclaimed, |bytes| {
++            done += bytes;
++            meter.report(done);
++        })?;
+     }
+     Ok(unclaimed)
+ }
+@@ -511,7 +595,10 @@ fn find_framed<R: Read + Seek>(
+     headers: &[HeaderInfo],
+     entries: &[Entry],
+     spans: &[Span],
++    progress: impl FnMut(u64, u64),
+ ) -> io::Result<Vec<Entry>> {
++    let mut meter = ByteProgress::new(spans.iter().map(|span| span.len).sum(), progress);
++    let mut done = 0;
+     let mut found = Vec::new();
+     let mut window = vec![0; 1 << 20];
+     let mut resume = 0;
+@@ -524,6 +611,7 @@ fn find_framed<R: Read + Seek>(
+         let (mut window_start, mut window_len) = (0u64, 0usize);
+         while position < end {
+             if position < window_start || position + 2 > window_start + window_len as u64 {
++                meter.report(done + position - span.offset);
+                 window_start = position;
+                 window_len = (end - position).min(window.len() as u64) as usize;
+                 if window_len < 2 {
+@@ -556,6 +644,8 @@ fn find_framed<R: Read + Seek>(
+             }
+             position += ALIGN;
+         }
++        done += span.len;
++        meter.report(done);
+     }
+     Ok(found)
+ }
+@@ -698,6 +788,7 @@ fn unclaimed_spans<R: Read + Seek>(
+     header: &HeaderInfo,
+     claimed: &[(u64, u64)],
+     out: &mut Vec<Span>,
++    mut on_bytes: impl FnMut(u64),
+ ) -> io::Result<()> {
+     let (start, end) = (header.index_end, header.region_end);
+     if start >= end {
+@@ -753,6 +844,7 @@ fn unclaimed_spans<R: Read + Seek>(
+             previous_free_zero = !nonzero;
+         }
+         position += len as u64;
++        on_bytes(len as u64);
+     }
+     flush(&mut run);
+     Ok(())
+diff --git a/02-rpf-index-extractor/src/tests.rs b/02-rpf-index-extractor/src/tests.rs
+index cc6c452..afe98ae 100644
+--- a/02-rpf-index-extractor/src/tests.rs
++++ b/02-rpf-index-extractor/src/tests.rs
+@@ -290,3 +290,56 @@ fn groups_zero_prefixed_spans_into_families() {
+     extract_all(&mut input, &inv, |e, p, _| { payloads.push((e.evidence, p)); Ok(()) }).unwrap();
+     assert!(payloads.iter().all(|&(_, p)| p == Payload::Stored));
+ }
++
++#[test]
++fn embedded_split_streams_across_chunk_boundary() {
++    struct Bounded(Cursor<Vec<u8>>);
++    impl Read for Bounded {
++        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
++            if buffer.len() > 1 << 20 {
++                return Err(io::Error::other("read exceeds the span buffer"));
++            }
++            self.0.read(buffer)
++        }
++    }
++    impl Seek for Bounded {
++        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
++            self.0.seek(position)
++        }
++    }
++
++    let boundary = 1 << 20;
++    let mut bytes = vec![0x77; boundary + 16];
++    bytes[boundary - 16..boundary].fill(0);
++    bytes[..2].copy_from_slice(&[0x12, 0x34]);
++    bytes[boundary..boundary + 2].copy_from_slice(&[0x12, 0x34]);
++    bytes[boundary + 5..].fill(0);
++    let span = Span {
++        header: 0, offset: 0, len: bytes.len() as u64,
++        head: bytes[..8].to_vec(), zero_prefix: true, exact_len: boundary as u64 + 5,
++    };
++    let families = BTreeMap::from([([0x12, 0x34], 3)]);
++    let pieces = split_embedded(&mut Bounded(Cursor::new(bytes)), vec![span], &families, |_, _| {}).unwrap();
++    assert_eq!(pieces.len(), 2);
++    assert_eq!((pieces[0].offset, pieces[0].len), (0, boundary as u64 - 16));
++    assert_eq!((pieces[1].offset, pieces[1].len, pieces[1].exact_len), (boundary as u64, 16, 5));
++    assert_eq!(&pieces[1].head[..2], &[0x12, 0x34]);
++}
++
++#[test]
++fn excessive_embedded_boundaries_keep_the_original_span() {
++    let mut bytes = Vec::new();
++    for _ in 0..MAX_SPLITS_PER_SPAN + 2 {
++        bytes.extend_from_slice(&[0; 16]);
++        bytes.extend_from_slice(&[0x12, 0x34, 0x77, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
++    }
++    let span = Span {
++        header: 0, offset: 16, len: bytes.len() as u64 - 16,
++        head: bytes[16..24].to_vec(), zero_prefix: true, exact_len: bytes.len() as u64 - 29,
++    };
++    let families = BTreeMap::from([([0x12, 0x34], 3)]);
++    let pieces = split_embedded(&mut Cursor::new(bytes), vec![span.clone()], &families, |_, _| {}).unwrap();
++    assert_eq!(pieces.len(), 1);
++    assert_eq!((pieces[0].offset, pieces[0].len, pieces[0].exact_len),
++        (span.offset, span.len, span.exact_len));
++}
+diff --git a/03-format-identifier/src/lib.rs b/03-format-identifier/src/lib.rs
+index 05962d5..de2bf42 100644
+--- a/03-format-identifier/src/lib.rs
++++ b/03-format-identifier/src/lib.rs
+@@ -11,7 +11,7 @@ pub mod resource;
+ pub mod xml;
+ 
+ use resource::{Kind, Root};
+-use rpf9_index::{extract, inventory, Evidence, Inventory, Payload};
++use rpf9_index::{extract, Evidence, Inventory, Payload};
+ use rpf_archive::rpf9;
+ use std::collections::HashMap;
+ use std::io::{self, Read, Seek};
+@@ -212,17 +212,30 @@ struct Pending {
+ 
+ /// Identifies every entry of the archive.
+ pub fn identify<R: Read + Seek>(input: &mut R) -> io::Result<Report> {
+-    let inventory = inventory(input)?;
+-    // One pass rebuilds every PSO; each must match its inventory length.
++    identify_with_progress(input, |_, _, _, _| {})
++}
++
++pub fn identify_with_progress<R: Read + Seek>(
++    input: &mut R, mut progress: impl FnMut(&'static str, u64, u64, &'static str),
++) -> io::Result<Report> {
++    let inventory = rpf9_index::inventory_with_progress(input,
++        |phase, done, total| progress(phase, done, total, "bytes"))?;
+     let mut psos = HashMap::new();
+-    rpf9::recover_psos(input, |p, bytes| {
+-        psos.insert(p.offset, (bytes.len(), bytes.starts_with(b"PSIN")));
+-        Ok(())
+-    })?;
++    if inventory.entries.iter().any(|entry| entry.evidence == Evidence::PsoFramed) {
++        progress("Checking PSO blocks", 0, 0, "bytes");
++        rpf9::recover_psos_with_progress(input, |p, bytes| {
++            psos.insert(p.offset, (bytes.len(), bytes.starts_with(b"PSIN")));
++            Ok(())
++        }, |done, total| progress("Checking PSO blocks", done, total, "bytes"))?;
++    }
+     let mut entries = Vec::with_capacity(inventory.entries.len());
+     let mut roots: Vec<Option<RootSlot>> = Vec::with_capacity(inventory.entries.len());
+     let mut pending: Option<Pending> = None;
+-    for e in &inventory.entries {
++    let total = inventory.entries.len();
++    for (completed, e) in inventory.entries.iter().enumerate() {
++        if completed % 32 == 0 || completed + 1 == total {
++            progress("Validating entries", completed as u64, total as u64, "entries");
++        }
+         let mut bytes = None;
+         let (p, decompressed, head) = match e.evidence {
+             Evidence::PsoFramed => {
+@@ -235,8 +248,10 @@ pub fn identify<R: Read + Seek>(input: &mut R) -> io::Result<Report> {
+             Evidence::EncryptedDelimited => (simple(Format::Encrypted, "", Check::None, "content not decoded"), false, Vec::new()),
+             Evidence::OpaqueSpan => (simple(Format::Opaque, "", Check::None, "content not decoded"), false, Vec::new()),
+             Evidence::ZlibUnterminated => {
+-                let stored = extract(input, e, Payload::Stored)?;
+-                (simple(Format::Unknown, "", Check::None, "zlib sequence without a verified end"), false, stored[..stored.len().min(16)].to_vec())
++                let mut head = vec![0; e.stored_len().min(16) as usize];
++                input.seek(std::io::SeekFrom::Start(e.offset))?;
++                input.read_exact(&mut head)?;
++                (simple(Format::Unknown, "", Check::None, "zlib sequence without a verified end"), false, head)
+             }
+             Evidence::ZlibSequence | Evidence::ZlibStream => {
+                 let decoded = extract(input, e, Payload::Decoded)?;
+@@ -275,6 +290,7 @@ pub fn identify<R: Read + Seek>(input: &mut R) -> io::Result<Report> {
+             pending = Some(Pending { header: e.header, ordinals: vec![e.ordinal], bytes });
+         }
+     }
++    progress("Validating entries", total as u64, total as u64, "entries");
+     let resources = group_resources(&inventory, &mut entries, roots);
+     Ok(Report { inventory, entries, resources })
+ }
