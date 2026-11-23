@@ -1,11 +1,13 @@
 <Window x:Class="ViceModVI.Desktop.Workbench"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="ViceModVI for Xbox" Width="1280" Height="830" MinWidth="850" MinHeight="580"
+        Title="ViceModVI for Xbox" Icon="Assets/vicemodvi.ico" Width="1280" Height="830" MinWidth="850" MinHeight="580"
         Background="{StaticResource Canvas}" FontFamily="Segoe UI" FontSize="13" Closing="CloseWindow">
     <DockPanel>
         <Border DockPanel.Dock="Top" Background="{StaticResource Header}" BorderBrush="{StaticResource Gold}" BorderThickness="0,0,0,2" Padding="20,14">
             <DockPanel>
+                <Image DockPanel.Dock="Left" Source="Assets/leonida-logo-transparent.png"
+                       Width="42" Height="42" Margin="0,0,10,0" VerticalAlignment="Center"/>
                 <TextBlock DockPanel.Dock="Left" VerticalAlignment="Center" Foreground="{StaticResource HeaderInk}" FontSize="24"
                            FontWeight="DemiBold" Margin="0,0,28,0" Text="ViceModVI for Xbox"/>
                 <WrapPanel VerticalAlignment="Center">
@@ -84,8 +86,21 @@
             <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" Background="Transparent"/>
             <Border Grid.Column="2" Background="{StaticResource PreviewPanel}" BorderBrush="{StaticResource Line}" BorderThickness="1" Padding="14">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" x:Name="AssetHeading" Text="Preview" FontSize="20" FontWeight="SemiBold"
-                               TextTrimming="CharacterEllipsis" Margin="0,0,0,10"/>
+                    <Grid DockPanel.Dock="Top" HorizontalAlignment="Left" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="AssetHeading" Text="Preview" FontSize="20" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                        <Button Grid.Column="1" x:Name="CopyNameButton" Click="CopyAssetName"
+                                AutomationProperties.Name="Copy name" ToolTip="Copy name"
+                                IsEnabled="False" Margin="6,0,0,0" Padding="4" Width="27" Height="27">
+                            <Path Width="15" Height="15" Stretch="Uniform" StrokeThickness="1.35"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  Data="M 4,12 H 2 V 2 H 12 V 4 M 5,5 H 15 V 15 H 5 Z"/>
+                        </Button>
+                    </Grid>
                     <StackPanel DockPanel.Dock="Bottom" x:Name="CompareControls" Visibility="Collapsed"
                                 Orientation="Horizontal" Margin="0,12,0,0">
                         <RadioButton x:Name="ShowOriginal" GroupName="PreviewMode" Content="Original" IsChecked="True"
@@ -116,20 +131,35 @@
                             <TextBlock Text="Material" FontSize="11" Margin="0,7,0,3"/>
                             <ComboBox x:Name="Materials" AutomationProperties.Name="Material" SelectionChanged="SelectMaterial"/>
                             <TextBlock x:Name="LinkDetails" TextWrapping="Wrap" FontSize="11" Margin="0,6"/>
+                            <TextBlock x:Name="PreviewColorDetails" TextWrapping="Wrap" FontSize="11"/>
+                            <StackPanel x:Name="TextureChoicePanel" Visibility="Collapsed">
+                                <TextBlock Text="Texture" FontSize="11" Margin="0,0,0,3"/>
+                                <ComboBox x:Name="TextureChoices" AutomationProperties.Name="Texture"
+                                          SelectionChanged="SelectTexture" Margin="0,0,0,5">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Label}" TextWrapping="Wrap" MaxWidth="230"/>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
                             <Button x:Name="ShowLinked" Content="View linked texture" Click="ViewLinkedTexture"
+                                    Visibility="Collapsed" Margin="0,0,0,5" Padding="6"/>
+                            <Button Content="Export model as OBJ…" Click="ExportModel" Margin="0,0,0,5" Padding="6"/>
+                            <Button x:Name="ExportUvButton" Content="Export UV layout…" Click="ExportUvLayout"
+                                    IsEnabled="False" Margin="0,0,0,5" Padding="6"/>
+                        </StackPanel>
+                        <Button x:Name="ExportDdsButton" Content="Export texture as DDS…" Click="ExportTextureDds"
+                                Visibility="Collapsed" Margin="0,0,0,5" Padding="6"/>
+                        <StackPanel x:Name="EditPanel" Visibility="Collapsed">
+                            <Button Content="Import replacement…" Click="ImportReplacement" Margin="0,0,0,5" Padding="6"/>
+                            <TextBlock x:Name="EditDetails" TextWrapping="Wrap" FontSize="11" Margin="0,3,0,6" Foreground="{StaticResource Muted}"/>
+                            <Button x:Name="ConvertButton" Content="Convert for TTPF export…" Click="ConvertForPool"
+                                    Visibility="Collapsed" Margin="0,0,0,5" Padding="6"/>
+                            <Button x:Name="RevertButton" Content="Revert replacement" Click="RevertReplacement"
                                     Visibility="Collapsed" Margin="0,0,0,5" Padding="6"/>
                         </StackPanel>
                         <TextBlock x:Name="TextureDetails" TextWrapping="Wrap" FontSize="11" Margin="0,5"/>
-                        <Expander x:Name="EditPanel" Header="Edit texture" Visibility="Collapsed" Margin="0,4,0,0">
-                            <StackPanel Margin="0,5,0,0">
-                                <Button Content="Import replacement…" Click="ImportReplacement" Margin="0,0,0,5" Padding="6"/>
-                                <TextBlock x:Name="EditDetails" TextWrapping="Wrap" FontSize="11" Margin="0,3,0,6" Foreground="{StaticResource Muted}"/>
-                                <Button x:Name="ConvertButton" Content="Convert for TTPF export…" Click="ConvertForPool"
-                                        Visibility="Collapsed" Margin="0,0,0,5" Padding="6"/>
-                                <Button x:Name="RevertButton" Content="Revert replacement" Click="RevertReplacement"
-                                        Visibility="Collapsed" Margin="0" Padding="6"/>
-                            </StackPanel>
-                        </Expander>
                     </StackPanel>
                 </ScrollViewer>
             </Border>

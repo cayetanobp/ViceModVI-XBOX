@@ -46,10 +46,10 @@ PS5 and PC game assets still need their own format profiles and platform tests.
 
 | Step | What ViceModVI does |
 | --- | --- |
-| **Open** | Use **Open file** for one `.rpf` or `.ttpf`, or **Open folder** to catalog both types together. The viewer reuses cached source indexes when the file size, timestamp, and sampled bytes still match. |
+| **Open** | Use **Open file** for one `.rpf` or `.ttpf`, or **Open folder** to catalog both types together. The viewer loads vicemodvi-catalog.json from the root when present. The JSON must reference the local asset paths. The viewer reuses cached source indexes when the file size, timestamp, and sampled bytes still match. |
 | **Trace** | Select a mesh and material. When the viewer confirms a diffuse texture by its native key, **View linked texture** jumps to that entry, including in another open archive or pool. The catalog keeps source locators and distinguishes recovered names from aliases. |
-| **Preview and export** | Inspect the texture and its available mips or preview a static model with its resolved diffuse image. Right-click to export. DDS retains the available format and mips, PNG saves the decoded image, and OBJ includes geometry and available UVs. |
-| **Edit a texture** | Use **Edit texture** to import an image and toggle **Original** and **Replacement**. Edits stay in the session. Export a DDS to keep a file, or revert the staged edit. Use the CLI when you need a verified archive copy. |
+| **Preview and export** | Inspect the texture and its available mips or preview a static model with its resolved diffuse image. The inspector can select a texture candidate and export OBJ, DDS, or a transparent PNG of the selected mesh UVs. Right-click for more export options. DDS retains the available format and mips, PNG saves the decoded image, and OBJ includes geometry and available UVs. |
+| **Edit a texture** | Use **Import replacement…** to import an image and toggle **Original** and **Replacement**. Edits stay in the session. Export a DDS to keep a file, or revert the staged edit. Use the CLI when you need a verified archive copy. |
 
 ### Data limitations
 
@@ -62,7 +62,7 @@ and animations require separate support.
 
 ## Build
 
-Use **Windows**, the **.NET 10 SDK** with Windows Desktop Runtime, and **Git**.
+Use **Windows**, the **.NET 10 SDK** with Windows Desktop Runtime, **Git**, and **Rust with the MSVC build tools**.
 The WPF viewer build also builds the CLI. For the sample CLI walkthrough, you
 also need Python 3 and Leonida's `rpf9_carve.py`, or a compatible inventory TSV.
 
@@ -77,6 +77,8 @@ at the same revision. The build checks the local checkout first. Set
 ```powershell
 git clone --no-checkout https://github.com/breadbbbb/rpf9-explorer.git .local/rpf9-explorer
 git -C .local/rpf9-explorer checkout --detach 48557ead00601d3757ba12b894f2595c4faad2a5
+$compactMipPatch = (Resolve-Path tools/rpf9-explorer-compact-a8.patch).Path
+git -C .local/rpf9-explorer apply $compactMipPatch
 ```
 
 Core targets .NET 8 and restores BCnEncoder.Net 2.3.0. The first build also
@@ -97,34 +99,17 @@ source tree to narrow the list and search results. The status bar reports scan
 progress. Closing the viewer during indexing keeps completed source indexes.
 To measure an uncached CLI scan, use `catalog OUTPUT --fresh INPUT`.
 
-### Expanded model coverage
+### Model reader
 
-An optional Rust helper inventories RPFs, lists individual drawables, and
-decodes supported geometry on selection or export. It can supply candidate
-offsets to the existing readers. Supported materials can resolve diffuse
-textures by full native key, including textures in TTPF pools in the catalog.
+The build compiles the in-repo Rust model reader and includes
+`vicemodvi_models.dll` in the Windows output. The desktop viewer and CLI call the
+library directly. The reader inventories RPFs, lists individual drawables,
+and decodes supported geometry on selection or export. Supported materials can
+resolve diffuse textures by full native key across the loaded TTPF pools.
 
-<details>
-<summary>Build the optional model reader</summary>
-
-Install Rust and the MSVC build tools. From the repository root, after the
-.NET build, apply the bundled indexing and memory patch once to a clean
-`gta6-resource-tools` checkout at the pinned revision.
-
-```powershell
-git clone https://github.com/cayetanobp/gta6-resource-tools.git ../gta6-resource-tools
-git -C ../gta6-resource-tools checkout --detach 3e6f69cb840112dc7b198f2e23a14520e493dc23
-$readerPatch = (Resolve-Path tools/model-reader/gta6-resource-tools-progress.patch).Path
-git -C ../gta6-resource-tools apply $readerPatch
-cargo build --locked --release --manifest-path tools/model-reader/Cargo.toml --target-dir .local/model-reader
-Copy-Item .local/model-reader/release/vicemodvi-models.exe (Split-Path $viewer)
-Copy-Item .local/model-reader/release/vicemodvi-models.exe (Split-Path $cli)
-```
-
-Place the helper next to the executable that uses it. ViceModVI uses its
-existing model reader when the helper is absent.
-
-</details>
+The vendored crates are from `gta6-resource-tools` revision
+`3e6f69cb840112dc7b198f2e23a14520e493dc23` with the indexing and progress patch
+already applied. The build includes only the RPF9 reader modules it uses. The upstream license and notices are retained.
 
 ## Reproduce the sample
 
@@ -144,7 +129,7 @@ The expected SHA-256 of `core_restofworld.rpf` is
    `data/ttdb/props/ttdb_props.ttpf`. Use **Export selection** from the context
    menu to save the texture as DDS or PNG. Ctrl-select multiple entries to
    export them into one folder.
-3. Expand **Edit texture** and choose **Import replacement**. Toggle
+3. Choose **Import replacement…** in the inspector. Toggle
    **Original** and **Replacement** to compare the image in the texture
    preview or on the mesh. Choose **Export staged DDS** to keep the edit as
    a file, or **Revert replacement** to clear it.

@@ -1,0 +1,14 @@
+diff --git a/Core/TtpfReader.cs b/Core/TtpfReader.cs
+--- a/Core/TtpfReader.cs
++++ b/Core/TtpfReader.cs
+@@ -280,6 +280,10 @@
+     }
+     private static bool ValidatedCompactProfile(int width, int height, int mips, int format, int nonTail, int mode, uint meta, uint extra)
+     {
++        // Standalone A8 mips use the same compact allocation order, with
++        // one byte per pixel instead of one element per compression block.
++        if ((mode, width, height, mips, nonTail, format, meta, extra) ==
++            (4, 512, 512, 8, 3, 65, 0x482U, 0x015000F5U)) return true;
+         if (!RageTextureDecoder.IsBlockCompressed(format)) return false;
+         int bytes = RageTextureDecoder.GetTextureElementBytes(format);
+         return (mode, width, height, mips, nonTail, bytes, meta, extra) switch
