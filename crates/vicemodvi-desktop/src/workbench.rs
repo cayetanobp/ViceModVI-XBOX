@@ -15,7 +15,7 @@ use vicemodvi_core::{
     dds, files,
     project::{ReplacementProject, StagedTexture},
     texture_conversion::{self, TextureShape, IMAGE_EXTENSIONS},
-    texture_links::{self, TextureIndex, TextureLink},
+    texture_links::{self, LinkCandidate, MapRole, MaterialMap, TextureIndex},
     xbox_assets::{self, BuildOptions, TextureExport},
     Asset, Cancel, Catalog, Error, IndexProgress, Model, Pixels, Result,
 };
@@ -57,7 +57,13 @@ struct Busy {
 struct LoadedModel {
     asset: usize,
     model: Arc<Model>,
-    links: Vec<TextureLink>,
+    maps: Vec<MaterialMap>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct MapChoice {
+    reference: usize,
+    candidate: Option<usize>,
 }
 
 /// Decoded preview pixels and their egui texture.
@@ -87,6 +93,12 @@ struct Preview {
     staged: bool,
 }
 
+impl Preview {
+    fn picture(&self, replacement: bool) -> Option<&Picture> {
+        if replacement { self.replacement.as_ref() } else { self.original.as_ref() }
+    }
+}
+
 pub struct Workbench {
     catalog: Option<Arc<Catalog>>,
     index: Option<Arc<TextureIndex>>,
@@ -107,13 +119,13 @@ pub struct Workbench {
 
     selected_asset: Option<usize>,
     model: Option<LoadedModel>,
-    model_job: Option<(usize, Job<Result<(Model, Vec<TextureLink>)>>)>,
+    model_job: Option<(usize, Job<Result<(Model, Vec<MaterialMap>)>>)>,
     model_error: Option<String>,
     mesh: Option<usize>,
     material: Option<i32>,
-    texture_choices: Vec<(Option<String>, String)>,
-    texture_choice: Option<String>,
-    preview_choices: HashMap<i32, Option<String>>,
+    map_choice: Option<MapChoice>,
+    map_choices: HashMap<i32, MapChoice>,
+    debug_map: bool,
 
     texture: Option<usize>,
     preview: Option<Preview>,
@@ -194,9 +206,9 @@ impl Workbench {
             model_error: None,
             mesh: None,
             material: None,
-            texture_choices: Vec::new(),
-            texture_choice: None,
-            preview_choices: HashMap::new(),
+            map_choice: None,
+            map_choices: HashMap::new(),
+            debug_map: false,
             texture: None,
             preview: None,
             texture_job: None,
@@ -264,7 +276,7 @@ impl Workbench {
     }
 
     fn set_workspace(&mut self, catalog: Catalog, folder: Option<PathBuf>) {
-        self.preview_choices.clear();
+        self.map_choices.clear();
         self.project = ReplacementProject::new();
         self.selected_asset = None;
         self.search.clear();
@@ -376,7 +388,7 @@ impl Workbench {
 
     fn load_asset(&mut self, asset: Option<usize>) {
         if self.selected_asset != asset {
-            self.preview_choices.clear();
+            self.map_choices.clear();
         }
         self.selected_asset = asset;
         self.model = None;
@@ -384,8 +396,8 @@ impl Workbench {
         self.model_error = None;
         self.mesh = None;
         self.material = None;
-        self.texture_choices.clear();
-        self.texture_choice = None;
+        self.map_choice = None;
+        self.debug_map = false;
         self.load_texture(None);
         let (Some(asset), Some(catalog), Some(index)) = (asset, self.catalog.clone(), self.index.clone()) else { return };
         match catalog.assets[asset].kind.as_str() {
@@ -393,8 +405,8 @@ impl Workbench {
                 self.model_job = Some((asset, Job::spawn(&self.ctx, move |_| {
                     let entry = &catalog.assets[asset];
                     let model = xbox_assets::read_model(&catalog, entry)?;
-                    let links = texture_links::resolve_model(&catalog, &index, entry, &model)?;
-                    Ok((model, links))
+                    let maps = texture_links::resolve_material_maps(&catalog, &index, entry, &model)?;
+                    Ok((model, maps))
                 })));
             }
             "texture" => self.load_texture(Some(asset)),
@@ -402,14 +414,17 @@ impl Workbench {
         }
     }
 
-    fn model_loaded(&mut self, asset: usize, model: Model, links: Vec<TextureLink>) {
+    fn model_loaded(&mut self, asset: usize, model: Model, maps: Vec<MaterialMap>) {
         let model = Arc::new(model);
         let first = model
             .meshes
             .iter()
-            .position(|mesh| links.iter().any(|l| l.status == "confirmed" && Some(l.shader) == mesh.shader_index))
+            .position(|mesh| {
+                mesh.shader_index.and_then(|shader| texture_links::preferred_color_map(&maps, shader))
+                    .and_then(|(_, map)| map.verified_color_id()).is_some()
+            })
             .or(if model.meshes.is_empty() { None } else { Some(0) });
-        self.model = Some(LoadedModel { asset, model, links });
+        self.model = Some(LoadedModel { asset, model, maps });
         if let Some(mesh) = first {
             self.select_mesh(mesh);
         }
@@ -428,7 +443,7 @@ impl Workbench {
         let shader = loaded.model.meshes[mesh].shader_index;
         self.mesh = Some(mesh);
         self.material = shader.filter(|s| self.materials().iter().any(|(m, _)| m == s));
-        self.refresh_link();
+        self.refresh_map();
         self.fit_mesh();
     }
 
@@ -439,7 +454,7 @@ impl Workbench {
         if current != Some(shader) {
             self.mesh = loaded.model.meshes.iter().position(|m| m.shader_index == Some(shader));
         }
-        self.refresh_link();
+        self.refresh_map();
         self.fit_mesh();
     }
 
@@ -449,58 +464,60 @@ impl Workbench {
         }
     }
 
-    fn current_link(&self) -> Option<&TextureLink> {
-        let shader = self.material?;
-        self.model.as_ref()?.links.iter().find(|l| l.shader == shader)
+    fn selected_map(&self) -> Option<(&MaterialMap, Option<&LinkCandidate>)> {
+        let choice = self.map_choice?;
+        let map = self.model.as_ref()?.maps.get(choice.reference)?;
+        let candidate = choice.candidate.and_then(|i| map.link.candidates.get(i));
+        Some((map, candidate))
     }
 
-    fn refresh_link(&mut self) {
-        let Some(catalog) = self.catalog.clone() else { return };
-        let link = self.current_link().cloned();
-        let mut chosen = link.as_ref().and_then(|l| l.texture_id.clone());
-        if let Some(manual) = self.material.and_then(|s| self.preview_choices.get(&s)) {
-            chosen = manual.clone();
-        }
-        let mut choices: Vec<(Option<String>, String)> = link
-            .as_ref()
-            .map(|l| {
-                l.candidates
-                    .iter()
-                    .filter_map(|c| catalog.get(&c.asset_id).ok().map(|a| (Some(a.id.clone()), format!("{} · {} · {}", a.name, file_name(&c.source), a.id))))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if self.material.is_some_and(|shader| !self.preview_choices.contains_key(&shader)) {
-            if let Some((model, shader)) = self.model.as_ref().zip(self.material) {
-                let saved = material_texture_path(&catalog, &catalog.assets[model.asset], shader)
-                    .ok().and_then(|path| std::fs::read_to_string(path).ok());
-                if let Some(saved) = saved {
-                    let matched = choices.iter().filter_map(|(id, _)| id.as_ref()).find(|id| {
-                        catalog.get(id).ok().and_then(|entry| confirmed_texture_path(&catalog, entry).ok())
-                            .is_some_and(|path| path.file_name().is_some_and(|name| name == saved.as_str()) && path.is_file())
-                    });
-                    if let Some(id) = matched {
-                        chosen = Some(id.clone());
-                    }
-                }
+    fn preferred_color_map(&self) -> Option<(usize, &MaterialMap)> {
+        texture_links::preferred_color_map(&self.model.as_ref()?.maps, self.material?)
+    }
+
+    fn default_map(&self) -> Option<MapChoice> {
+        let (reference, map) = self.preferred_color_map()?;
+        let id = map.verified_color_id()?;
+        let candidate = map.link.candidates.iter().position(|c| c.asset_id == id)?;
+        Some(MapChoice { reference, candidate: Some(candidate) })
+    }
+
+    fn shows_verified_color(&self) -> bool {
+        self.default_map().is_some_and(|choice| self.map_choice == Some(choice))
+    }
+
+    fn refresh_map(&mut self) {
+        let choice = self.material.and_then(|shader| self.map_choices.get(&shader).copied()).or_else(|| self.default_map());
+        self.apply_map(choice);
+    }
+
+    fn select_map(&mut self, choice: Option<MapChoice>) {
+        if let Some(shader) = self.material {
+            if let Some(choice) = choice {
+                self.map_choices.insert(shader, choice);
+            } else {
+                self.map_choices.remove(&shader);
             }
         }
-        if !choices.is_empty() && link.as_ref().is_some_and(|l| l.texture_id.is_none()) {
-            choices.insert(0, (None, "Choose a texture for preview".into()));
-        }
-        self.texture_choice = choices.iter().find(|(id, _)| *id == chosen).and_then(|(id, _)| id.clone());
-        self.texture_choices = choices;
-        let choice = self.texture_choice.clone();
-        self.select_texture(choice);
+        self.refresh_map();
     }
 
-    fn select_texture(&mut self, id: Option<String>) {
-        if let Some(shader) = self.material {
-            self.preview_choices.insert(shader, id.clone());
-        }
-        self.texture_choice = id.clone();
-        let asset = id.and_then(|id| self.catalog.as_ref().and_then(|c| c.position(&id)));
+    fn apply_map(&mut self, choice: Option<MapChoice>) {
+        self.map_choice = choice;
+        self.debug_map = false;
+        let asset = self.selected_map().and_then(|(_, candidate)| candidate)
+            .and_then(|candidate| self.catalog.as_ref()?.position(&candidate.asset_id));
         self.load_texture(asset);
+    }
+
+    fn uses_vertex_colors(&self, verified_color: bool) -> bool {
+        let Some((loaded, index)) = self.model.as_ref().zip(self.mesh) else { return false };
+        let mesh = &loaded.model.meshes[index];
+        verified_color
+            && self.selected_map().and_then(|(map, _)| map.link.name_hash.as_deref()) == Some(WHITE_DIFFUSE)
+            && !self.show_replacement
+            && !self.preview.as_ref().is_some_and(|p| p.confirmed)
+            && mesh.vertex_colors.as_ref().is_some_and(|c| c.len() == mesh.positions.len())
     }
 
     fn load_texture(&mut self, asset: Option<usize>) {
@@ -510,6 +527,7 @@ impl Workbench {
         self.texture = asset;
         self.preview = None;
         self.show_replacement = false;
+        self.reveal_replacement = false;
         let (Some(asset), Some(catalog)) = (asset, self.catalog.clone()) else { return };
         let stage = self.project.find(&catalog.assets[asset]).cloned();
         let job = Job::spawn(&self.ctx, move |cancel| read_preview(&catalog, asset, stage.as_ref(), cancel));
@@ -575,7 +593,6 @@ impl Workbench {
     fn confirm_replacement(&mut self, ctx: &egui::Context) {
         let (Some(asset), Some(catalog)) = (self.texture, self.catalog.clone()) else { return };
         let Some(stage) = self.project.find(&catalog.assets[asset]).cloned() else { return };
-        let material = self.model.as_ref().zip(self.material).map(|(model, shader)| (model.asset, shader));
         self.run(ctx, "Saving texture replacement…", move |cancel| {
             let entry = &catalog.assets[asset];
             let source = catalog.source_of(entry)?;
@@ -585,11 +602,6 @@ impl Workbench {
             let path = confirmed_texture_path(&catalog, entry)?;
             cancel.check()?;
             write_confirmed(&path, &stage.dds)?;
-            if let Some((model, shader)) = material {
-                let binding = material_texture_path(&catalog, &catalog.assets[model], shader)?;
-                let file_name = path.file_name().ok_or_else(|| Error::io("Replacement has no file name."))?;
-                write_confirmed(&binding, file_name.to_string_lossy().as_bytes())?;
-            }
             Ok(Done::Confirmed { asset })
         });
     }
@@ -718,7 +730,7 @@ impl Workbench {
                     self.model_job = None;
                     if self.selected_asset == Some(asset) {
                         match result {
-                            Ok((model, links)) => self.model_loaded(asset, model, links),
+                            Ok((model, maps)) => self.model_loaded(asset, model, maps),
                             Err(error) => {
                                 self.status = error.to_string();
                                 self.model_error = Some(error.to_string());
@@ -769,8 +781,10 @@ impl Workbench {
                 let Some(catalog) = self.catalog.clone() else { return };
                 match self.project.stage(&catalog, &catalog.assets[asset], &path.to_string_lossy(), dds) {
                     Ok(()) => {
-                        self.reveal_replacement = true;
-                        self.load_texture(Some(asset));
+                        if self.texture == Some(asset) {
+                            self.load_texture(Some(asset));
+                            self.reveal_replacement = true;
+                        }
                         self.status = "Replacement staged for this session.".into();
                     }
                     Err(error) => self.status = error.to_string(),
@@ -828,10 +842,6 @@ fn confirmed_texture_path(catalog: &Catalog, entry: &Asset) -> Result<PathBuf> {
     let locator = entry.id.strip_prefix(&source.id).and_then(|tail| tail.strip_prefix(':')).unwrap_or(&entry.id);
     let key = format!("{}|{}|{locator}", file_name.to_string_lossy(), source.fingerprint.sha256);
     Ok(directory.join(".vicemodvi-textures").join(format!("{}.dds", vicemodvi_core::util::sha256_hex(key.as_bytes()))))
-}
-
-fn material_texture_path(catalog: &Catalog, model: &Asset, shader: i32) -> Result<PathBuf> {
-    Ok(confirmed_texture_path(catalog, model)?.with_extension(format!("{shader}.binding")))
 }
 
 fn write_confirmed(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -1131,16 +1141,22 @@ impl Workbench {
     }
 
     fn draw_preview(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame, area: Rect) {
-        let picture = self.preview.as_ref().and_then(|p| if self.show_replacement { p.replacement.as_ref() } else { p.original.as_ref() });
+        let verified_color = self.shows_verified_color();
+        let debug_label = match self.selected_map() {
+            Some((map, Some(candidate))) if self.debug_map && !verified_color => Some(format!(
+                "Debug preview · {}\n{} · {}", map.link.parameter_hash, file_name(&candidate.source), candidate.asset_id
+            )),
+            _ => None,
+        };
+        let colors = self.uses_vertex_colors(verified_color);
+        let picture = self.preview.as_ref().and_then(|p| p.picture(self.show_replacement));
         let mesh = self.model.as_ref().zip(self.mesh);
         if let (Some((loaded, index)), Some(state), Some(viewer)) = (mesh, frame.wgpu_render_state(), self.viewer.as_mut()) {
             let mesh = &loaded.model.meshes[index];
-            let white = loaded.links.iter().find(|l| Some(l.shader) == mesh.shader_index).and_then(|l| l.name_hash.as_deref()) == Some(WHITE_DIFFUSE);
-            let colors = white && !self.show_replacement && !self.preview.as_ref().is_some_and(|p| p.confirmed) && mesh.vertex_colors.as_ref().is_some_and(|c| c.len() == mesh.positions.len());
             let has_uv = mesh.tex_coords.as_ref().is_some_and(|uv| uv.len() == mesh.positions.len());
             let key = format!("{}#{index}", loaded.asset);
             viewer.set_mesh(state, &key, mesh, colors);
-            let image = picture.filter(|_| has_uv && !colors).map(|p| {
+            let image = picture.filter(|_| has_uv && !colors && (verified_color || debug_label.is_some())).map(|p| {
                 let fitted = fit_pixels(&p.pixels, viewer.max_texture_side as usize);
                 (p.key.clone(), fitted)
             });
@@ -1150,12 +1166,21 @@ impl Workbench {
             );
             let surface = if colors {
                 Surface::VertexColors
+            } else if image.is_some() && debug_label.is_some() {
+                Surface::DebugTexture
             } else if image.is_some() {
                 Surface::Texture
             } else {
                 Surface::Plain
             };
             viewer.show(ui, state, area, &mut self.camera, surface);
+            if let (Surface::DebugTexture, Some(label)) = (surface, debug_label) {
+                let painter = ui.painter().with_clip_rect(area);
+                let label = painter.layout(label, FontId::proportional(12.0), theme::INK, (area.width() - 24.0).max(1.0));
+                let position = area.min + egui::vec2(10.0, 10.0);
+                painter.rect_filled(Rect::from_min_size(position, label.size()).expand(5.0), 3.0, theme::PAPER);
+                painter.galley(position, label, theme::INK);
+            }
             return;
         }
         if let (Some(picture), None) = (picture, mesh) {
@@ -1221,59 +1246,95 @@ impl Workbench {
                     }
                 }
             });
-            match self.current_link() {
-                None => {
-                    ui.label(small("No recognized diffuse reference."));
-                }
-                Some(link) => {
-                    let mut text = format!("{} · {}", link.slot, link.status);
-                    if link.texture_id.is_some() {
-                        text.push_str(&format!("\n{}", link.candidates.first().map(|c| file_name(&c.source)).unwrap_or_default()));
-                    } else {
-                        text.push_str(&format!("\n{}", link.reason));
-                        for candidate in &link.candidates {
-                            text.push_str(&format!("\n{} · {}", file_name(&candidate.source), candidate.asset_id));
-                        }
-                    }
-                    let mut tip = format!("{}\n{}", link.reason, link.key.as_deref().unwrap_or("Key unavailable"));
-                    for candidate in &link.candidates {
-                        tip.push_str(&format!("\n{} · {}", candidate.source, candidate.asset_id));
-                    }
-                    ui.label(small(&text)).on_hover_text(tip);
-                }
+            let maps = loaded.maps.iter().enumerate().filter(|(_, map)| Some(map.link.shader) == self.material);
+            if self.default_map().is_none() {
+                let message = if self.preferred_color_map().is_some_and(|(_, map)| map.role == MapRole::Diffuse) {
+                    "Shader color preview unavailable. The diffuse reference could not be confirmed."
+                } else {
+                    "Shader color preview unsupported. A verified color input or reconstruction is unavailable."
+                };
+                ui.label(small(message));
             }
-            if let Some(index) = self.mesh {
-                let mesh = &loaded.model.meshes[index];
-                let white = loaded.links.iter().find(|l| Some(l.shader) == mesh.shader_index).and_then(|l| l.name_hash.as_deref()) == Some(WHITE_DIFFUSE);
-                if white && !self.show_replacement && !self.preview.as_ref().is_some_and(|p| p.confirmed) && mesh.vertex_colors.as_ref().is_some_and(|c| c.len() == mesh.positions.len()) {
-                    ui.label(small("Preview uses vertex colors with the white diffuse."));
-                }
+            let verified_color = self.shows_verified_color();
+            if self.uses_vertex_colors(verified_color) {
+                ui.label(small("Preview uses vertex colors with the white diffuse."));
             }
-            if !self.texture_choices.is_empty() {
-                ui.label(small("Texture"));
-                let current = self.texture_choices.iter().find(|(id, _)| *id == self.texture_choice).map(|(_, l)| l.clone()).unwrap_or_default();
+            if maps.clone().next().is_some() {
+                ui.label(small("Referenced map"));
+                let current = match self.selected_map() {
+                    Some((map, Some(candidate))) => format!("{} · {}", map.link.parameter_hash, candidate.asset_id),
+                    Some((map, None)) => map.link.parameter_hash.clone(),
+                    None => "Select a map".into(),
+                };
                 egui::ComboBox::from_id_salt("texture").width(full).selected_text(line(&current, 13.0, theme::INK, full - 30.0, None)).show_ui(ui, |ui| {
-                    for (id, label) in &self.texture_choices {
-                        if ui.selectable_label(*id == self.texture_choice, label).clicked() {
-                            let id = id.clone();
-                            action = Some(Box::new(move |s: &mut Self| s.select_texture(id)));
+                    let automatic = self.material.is_none_or(|shader| !self.map_choices.contains_key(&shader));
+                    if ui.selectable_label(automatic, "Default material preview").clicked() {
+                        action = Some(Box::new(|s: &mut Self| s.select_map(None)));
+                    }
+                    for (reference, map) in maps {
+                        let hash = &map.link.parameter_hash;
+                        if map.link.candidates.is_empty() {
+                            let choice = MapChoice { reference, candidate: None };
+                            if ui.selectable_label(self.map_choice == Some(choice), format!("{hash} · No matching map")).clicked() {
+                                action = Some(Box::new(move |s: &mut Self| s.select_map(Some(choice))));
+                            }
+                        }
+                        for (index, candidate) in map.link.candidates.iter().enumerate() {
+                            let choice = MapChoice { reference, candidate: Some(index) };
+                            let title = format!("{hash} · {} · {}", candidate.asset_id, file_name(&candidate.source));
+                            let name = catalog.get(&candidate.asset_id).map(|entry| entry.name.as_str()).unwrap_or_default();
+                            if ui.selectable_label(self.map_choice == Some(choice), title).on_hover_text(name).clicked() {
+                                action = Some(Box::new(move |s: &mut Self| s.select_map(Some(choice))));
+                            }
                         }
                     }
                 });
             }
             let wide = |text: &str| egui::Button::new(text).min_size(egui::vec2(full, 0.0));
-            if self.texture_choice.is_some() && ui.add(wide("View linked texture")).clicked() {
-                action = Some(Box::new(|s: &mut Self| s.view_linked_texture()));
+            let uv = self.mesh.is_some_and(|m| {
+                let mesh = &loaded.model.meshes[m];
+                mesh.tex_coords.as_ref().is_some_and(|uv| !uv.is_empty() && uv.len() == mesh.positions.len())
+            });
+            if let Some((map, candidate)) = self.selected_map() {
+                let role = match map.role {
+                    MapRole::Diffuse => format!("Diffuse ({})", map.link.slot),
+                    MapRole::InferredDiffuse => format!("Unverified ({})", map.link.slot),
+                    MapRole::Normal => format!("Normal map ({})", map.link.slot),
+                    MapRole::PackedSpecular => format!("Packed specular and gloss ({})", map.link.slot),
+                    MapRole::PackedMaterial => format!("Packed material mask ({})", map.link.slot),
+                    MapRole::Unknown => "Unknown".into(),
+                };
+                let status = match map.link.status.as_str() {
+                    "confirmed" => "Resolved by native key",
+                    "ambiguous" => "Ambiguous",
+                    _ => "Unresolved",
+                };
+                ui.label(small(&format!("Shader role · {role}\nReference · {status}")))
+                    .on_hover_text(format!("{}\n{}", map.link.reason, map.link.key.as_deref().unwrap_or("Key unavailable")));
+                if let Some(candidate) = candidate {
+                    ui.label(small(&format!("Parameter {}\n{} · {}", map.link.parameter_hash, file_name(&candidate.source), candidate.asset_id)))
+                        .on_hover_text(&candidate.source);
+                    if !verified_color {
+                        let picture = self.preview.as_ref().and_then(|p| p.picture(self.show_replacement));
+                        if let Some(picture) = picture {
+                            let size = picture.handle.size_vec2();
+                            let scale = (full / size.x).min(140.0 / size.y).min(1.0);
+                            ui.image((picture.handle.id(), size * scale));
+                        }
+                        ui.add_enabled(uv && picture.is_some(), egui::Checkbox::new(&mut self.debug_map, "Debug preview on mesh"));
+                    }
+                    if ui.add(wide("View linked texture")).clicked() {
+                        action = Some(Box::new(|s: &mut Self| s.view_linked_texture()));
+                    }
+                } else {
+                    ui.label(small("Map decoding unavailable without a source entry."));
+                }
             }
             if ui.add(wide("Export model as OBJ…")).clicked() {
                 let asset = loaded.asset;
                 let ctx = ctx.clone();
                 action = Some(Box::new(move |s: &mut Self| s.export_one(&ctx, asset, false)));
             }
-            let uv = self.mesh.is_some_and(|m| {
-                let mesh = &loaded.model.meshes[m];
-                mesh.tex_coords.as_ref().is_some_and(|uv| !uv.is_empty() && uv.len() == mesh.positions.len())
-            });
             if ui.add_enabled(uv, wide("Export UV layout…")).clicked() {
                 let ctx = ctx.clone();
                 action = Some(Box::new(move |s: &mut Self| s.export_uv_layout(&ctx)));
@@ -1281,6 +1342,9 @@ impl Workbench {
         }
         let wide = |text: &str| egui::Button::new(text).min_size(egui::vec2(full, 0.0));
         if let Some(preview) = &self.preview {
+            if self.model.is_some() {
+                ui.label(small(if preview.info.is_some() { "Map decoding succeeded." } else { "Map decoding failed." }));
+            }
             if preview.info.is_some() && ui.add(wide("Export texture as DDS…")).clicked() {
                 let asset = preview.asset;
                 let ctx = ctx.clone();

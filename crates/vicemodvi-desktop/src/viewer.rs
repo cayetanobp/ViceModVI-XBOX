@@ -51,6 +51,9 @@ fn vs_main(v: VertexIn) -> VertexOut {
 @fragment
 fn fs_main(v: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let sampled = textureSample(surface, surface_sampler, v.uv);
+    if (u.mode.x == 3u) {
+        return vec4<f32>(sampled.rgb, 1.0);
+    }
     var base = u.base_color;
     if (u.mode.x == 1u) {
         base = v.color;
@@ -104,6 +107,7 @@ pub enum Surface {
     Plain,
     VertexColors,
     Texture,
+    DebugTexture,
 }
 
 pub struct Camera {
@@ -455,6 +459,7 @@ impl Viewer {
                 match (surface, self.material.is_some()) {
                     (Surface::VertexColors, _) => 1,
                     (Surface::Texture, true) => 2,
+                    (Surface::DebugTexture, true) => 3,
                     _ => 0,
                 },
                 0,
@@ -465,7 +470,7 @@ impl Viewer {
         state.queue.write_buffer(&self.uniforms, 0, &uniforms.bytes());
         let (Some(target), Some(mesh)) = (&self.target, &self.mesh) else { return };
         let bind_group = match (surface, &self.material) {
-            (Surface::Texture, Some(material)) => &material.bind_group,
+            (Surface::Texture | Surface::DebugTexture, Some(material)) => &material.bind_group,
             _ => &self.plain,
         };
         let mut encoder = state.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("mesh preview") });
