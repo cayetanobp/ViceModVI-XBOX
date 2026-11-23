@@ -1,0 +1,12 @@
+[package]
+name = "rpf-archive"
+version = "0.10.0"
+edition = "2021"
+description = "Vendored RPF9 recovery module from rpf-archive"
+license = "Unlicense"
+repository = "https://github.com/VIRUXE/rpf-archive-rs"
+keywords = ["rpf", "gta", "rdr", "rockstar", "archive"]
+categories = ["parsing", "game-development"]
+
+[dependencies]
+flate2 = "1.0"

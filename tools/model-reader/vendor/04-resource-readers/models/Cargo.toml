@@ -1,0 +1,10 @@
+[package]
+name = "rpf9-models"
+version = "0.1.0"
+edition = "2021"
+description = "Model reader for drawables identified in observed 9FPR (RPF9) archives: vertex and meshlet decoding and GLB export"
+license = "Unlicense"
+publish = false
+
+[dependencies]
+rpf9-identify = { path = "../../03-format-identifier" }

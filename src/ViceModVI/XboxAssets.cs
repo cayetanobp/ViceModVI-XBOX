@@ -180,7 +180,7 @@ public static class XboxAssets
 
     internal static string? Key(ulong? key) => key is null or 0 ? null : key.Value.ToString("X16");
 
-    internal static byte[] DecodeSegments(FileStream file, Asset asset)
+    internal static byte[] DecodeSegments(FileStream file, Asset asset, CancellationToken cancellationToken = default)
     {
         if (asset.Segments is not { Length: > 0 } segments || asset.SystemBytes is not > 0)
             throw new InvalidDataException("A validated segmented resource is required.");
@@ -191,6 +191,7 @@ public static class XboxAssets
         int at = 0;
         foreach (var segment in segments)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             segment.Validate(file.Length);
             if (segment.Length > MaxResourceBytes) throw new InvalidDataException("Compressed segment exceeds the resource limit.");
             byte[] packed = new byte[(int)segment.Length];
@@ -218,8 +219,10 @@ public static class XboxAssets
             ?? throw new InvalidDataException("Model structure failed validation.");
     }
 
-    public static (byte[] Dds, TextureExport Info) ReadTexture(Catalog catalog, Asset asset)
+    public static (byte[] Dds, TextureExport Info) ReadTexture(Catalog catalog, Asset asset,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (asset.Type != "texture" || asset.Index is not int index)
             throw new InvalidDataException("Select a validated texture.");
         var source = catalog.SourceOf(asset);
@@ -230,16 +233,17 @@ public static class XboxAssets
         string decoder;
         if (source.Format == "ttpf")
         {
-            var t = TtpfReader.Inspect(source.Path).Textures.Single(item => item.Index == index);
+            var t = TtpfReader.Inspect(source.Path, cancellationToken).Textures.Single(item => item.Index == index);
             if (Key(t.AssetKey) != asset.NativeKey) throw new InvalidDataException("Native texture key differs.");
-            dds = TtpfReader.CreateDds(source.Path, index);
+            dds = TtpfReader.CreateDds(source.Path, index, cancellationToken);
             (width, height, sourceFormat, sourceMips, baseMip) = (t.Width, t.Height, t.DxgiFormat, t.SourceMips, t.BaseMipLevel);
             decoder = nameof(TtpfReader);
         }
         else
         {
             var parent = catalog.Get(asset.ParentId ?? throw new InvalidDataException("Missing RPF texture container."));
-            var data = DecodeSegments(file, parent);
+            var data = DecodeSegments(file, parent, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             var system = data.AsSpan(0, parent.SystemBytes!.Value);
             var graphics = data.AsSpan(parent.SystemBytes.Value);
             int? dictionaryOffset = null;
@@ -262,6 +266,7 @@ public static class XboxAssets
             (width, height, sourceFormat, sourceMips) = (t.Width, t.Height, t.DxgiFormat, t.MipCount);
             decoder = nameof(RageTextureDecoder);
         }
+        cancellationToken.ThrowIfCancellationRequested();
         var info = DdsTextureReader.Inspect(dds);
         string coverage = baseMip == 0 && info.Mips == sourceMips ? "complete mip chain" : "partial mip chain";
         if (sourceFormat != info.DxgiFormat) coverage += ", converted pixels";

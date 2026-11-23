@@ -8,12 +8,12 @@ public sealed record PoolWriteResult(int Index, string? NativeKey, int Neighbor,
 
 public static class PoolWriter
 {
-    public static TextureConversionPlan Plan(Catalog catalog, Asset asset, byte[] dds)
+    public static TextureConversionPlan Plan(Catalog catalog, Asset asset, byte[] dds, CancellationToken cancellationToken = default)
     {
         var (source, index) = Locate(catalog, asset);
         using var input = source.Open();
         source.Fingerprint.Check(source.Path, input, false);
-        var texture = FindTexture(asset, TtpfReader.Inspect(source.Path), index);
+        var texture = FindTexture(asset, TtpfReader.Inspect(source.Path, cancellationToken), index);
         return Plan(texture, dds);
     }
 

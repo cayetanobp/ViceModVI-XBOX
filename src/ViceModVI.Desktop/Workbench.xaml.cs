@@ -20,12 +20,14 @@ public partial class Workbench : Window
     private TextureExport? textureInfo;
     private RageModel? model;
     private TextureLink[] links = [];
+    private readonly Dictionary<int, string?> previewTextureChoices = [];
     private BitmapSource? originalImage;
     private BitmapSource? replacementImage;
     private bool updating;
     private bool busy;
     private bool closeAfterOpening;
     private CancellationTokenSource? openingCancellation;
+    private CancellationTokenSource? textureCancellation;
     private TextureConversionPlan? poolConversion;
     private Point? drag;
     private Point3D center;
@@ -33,6 +35,7 @@ public partial class Workbench : Window
 
     private sealed record MeshChoice(int Index, int? Shader, string Label);
     private sealed record MaterialChoice(int Shader, string Label);
+    private sealed record TextureChoice(string? AssetId, string Label);
 
     public Workbench() => InitializeComponent();
 
@@ -53,6 +56,7 @@ public partial class Workbench : Window
 
     private void SetWorkspace(Catalog loaded, string? folder = null)
     {
+        previewTextureChoices.Clear();
         catalog = loaded;
         project = new();
         selectedAsset = null;
@@ -103,6 +107,13 @@ public partial class Workbench : Window
             bool isFolder = Directory.Exists(path);
             var loaded = await Task.Run(() =>
             {
+                if (isFolder)
+                {
+                    string savedCatalog = Path.Combine(path, "vicemodvi-catalog.json");
+                    if (File.Exists(savedCatalog))
+                        return Catalog.Load(savedCatalog);
+                }
+
                 IEnumerable<string> paths = isFolder
                     ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
                         .Where(p => Path.GetExtension(p).ToLowerInvariant() is ".rpf" or ".ttpf")
@@ -124,18 +135,50 @@ public partial class Workbench : Window
         }
     }
 
+    private void OpenRepository(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
+    {
+        e.Handled = true;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(e.Uri.AbsoluteUri)
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            StatusLine.Text = "Could not open the repository link.";
+        }
+    }
+
+    private void CopyAssetName(object sender, RoutedEventArgs e)
+    {
+        if (selectedAsset is not { } asset) return;
+        try
+        {
+            Clipboard.SetText(asset.Name);
+            StatusLine.Text = "Name copied to clipboard.";
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            StatusLine.Text = "Could not copy the name. Try again.";
+        }
+    }
+
     private void LoadAsset(Asset? asset)
     {
         if (catalog is null) return;
+        if (selectedAsset?.Id != asset?.Id) previewTextureChoices.Clear();
         selectedAsset = asset;
         model = null;
         links = [];
         MeshControls.Visibility = Visibility.Collapsed;
         AssetHeading.Text = asset?.Name ?? "Preview";
+        CopyNameButton.IsEnabled = asset is not null;
         string? sourcePath = asset is null ? null : catalog.SourceOf(asset).Path;
         AssetDetails.Text = asset is null ? "" : $"{Path.GetFileName(sourcePath)}\n{asset.Id} · {asset.NameOrigin}";
         AssetDetails.ToolTip = asset is null ? null : $"{sourcePath}\n{asset.Evidence}";
-        LoadTexture(null);
+        _ = LoadTextureAsync(null);
         if (asset is null) return;
         try
         {
@@ -157,7 +200,7 @@ public partial class Workbench : Window
                 updating = false;
                 SelectMesh(this, null!);
             }
-            else if (asset.Type == "texture") LoadTexture(asset);
+            else if (asset.Type == "texture") _ = LoadTextureAsync(asset);
         }
         catch (Exception error) when (IsAssetError(error))
         {
@@ -198,74 +241,146 @@ public partial class Workbench : Window
                     $"\n{Path.GetFileName(candidate.Source)} · {candidate.AssetId}")));
         LinkDetails.ToolTip = link is null ? null : $"{link.Reason}\n{link.Key ?? "Key unavailable"}" +
             string.Concat(link.Candidates.Select(candidate => $"\n{candidate.Source} · {candidate.AssetId}"));
-        ShowLinked.Visibility = link?.TextureId is not null ? Visibility.Visible : Visibility.Collapsed;
-        LoadTexture(link?.TextureId is string id ? catalog!.Get(id) : null);
+        string? chosenId = link?.TextureId;
+        if (shader is int shaderIndex && previewTextureChoices.TryGetValue(shaderIndex, out var manualId))
+            chosenId = manualId;
+
+        var choices = link?.Candidates.Select(candidate =>
+        {
+            var asset = catalog!.Get(candidate.AssetId);
+            return new TextureChoice(asset.Id, $"{asset.Name} · {Path.GetFileName(candidate.Source)} · {asset.Id}");
+        }).ToList() ?? [];
+        if (choices.Count > 0 && link?.TextureId is null)
+            choices.Insert(0, new(null, "Choose a texture for preview"));
+
+        updating = true;
+        TextureChoices.ItemsSource = choices;
+        TextureChoices.SelectedItem = choices.FirstOrDefault(choice => choice.AssetId == chosenId);
+        TextureChoicePanel.Visibility = choices.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        updating = false;
+        SelectTexture(this, null!);
     }
 
-    private void LoadTexture(Asset? asset)
+    private void SelectTexture(object sender, SelectionChangedEventArgs e)
     {
-        if (texture?.Id != asset?.Id) EditPanel.IsExpanded = false;
+        if (updating || catalog is null || model is null) return;
+        string? id = (TextureChoices.SelectedItem as TextureChoice)?.AssetId;
+        if (Materials.SelectedItem is MaterialChoice material)
+            previewTextureChoices[material.Shader] = id;
+        ShowLinked.Visibility = id is not null ? Visibility.Visible : Visibility.Collapsed;
+        _ = LoadTextureAsync(id is null ? null : catalog.Get(id));
+    }
+
+    private async Task LoadTextureAsync(Asset? asset)
+    {
+        textureCancellation?.Cancel();
+        textureCancellation = null;
         texture = asset;
         textureInfo = null;
         poolConversion = null;
         originalImage = replacementImage = null;
-        TextureDetails.Text = "";
+        TextureDetails.Text = asset is null ? "" : "Reading texture…";
         EditDetails.Text = "";
-        var stage = asset is null ? null : project!.Find(asset);
-        bool poolTexture = asset is not null && catalog!.SourceOf(asset).Format == "ttpf";
-        if (asset is not null)
-        {
-            try
-            {
-                var (dds, info) = XboxAssets.ReadTexture(catalog!, asset);
-                textureInfo = info;
-                originalImage = Bitmap(DdsTextureReader.DecodeTexturePixels(dds));
-                TextureDetails.Text = $"{info.SourceWidth} × {info.SourceHeight} · DXGI {info.SourceFormat}\n" +
-                    $"{info.ExportedMips}/{info.SourceMips} mips · starts at {info.BaseMip}";
-            }
-            catch (Exception error) when (IsAssetError(error))
-            {
-                TextureDetails.Text = error.Message;
-            }
-            if (stage is not null)
-            {
-                var ddsInfo = DdsTextureReader.Inspect(stage.Dds);
-                EditDetails.Text = $"{stage.OriginalFileName}\n{TextureShape.From(ddsInfo)}";
-                try
-                {
-                    replacementImage = Bitmap(DdsTextureReader.DecodeTexturePixels(stage.Dds));
-                }
-                catch (Exception error) when (IsAssetError(error))
-                {
-                    EditDetails.Text += $"\nPreview unavailable. {error.Message}";
-                }
-                if (textureInfo is { } info && ReplacementProject.Compare(info, ddsInfo).Length != 0)
-                    EditDetails.Text += "\nPreview can differ from the final material.";
-                if (poolTexture) InspectPoolConversion(asset, stage);
-            }
-        }
-        EditPanel.Visibility = asset is null ? Visibility.Collapsed : Visibility.Visible;
-        EditDetails.Visibility = stage is null ? Visibility.Collapsed : Visibility.Visible;
-        RevertButton.Visibility = stage is null ? Visibility.Collapsed : Visibility.Visible;
-        ConvertButton.Visibility = stage is not null && poolTexture ? Visibility.Visible : Visibility.Collapsed;
-        ConvertButton.IsEnabled = poolConversion is not null;
-        ShowReplacement.IsEnabled = replacementImage is not null;
-        CompareControls.Visibility = replacementImage is null ? Visibility.Collapsed : Visibility.Visible;
-        if (replacementImage is null) ShowOriginal.IsChecked = true;
+        ExportDdsButton.Visibility = EditPanel.Visibility = CompareControls.Visibility = Visibility.Collapsed;
+        ShowReplacement.IsEnabled = false;
+        ShowOriginal.IsChecked = true;
         RefreshPreview();
-    }
+        if (asset is null || catalog is not { } currentCatalog) return;
 
-    private void InspectPoolConversion(Asset asset, StagedTexture stage)
-    {
+        using var request = new CancellationTokenSource();
+        textureCancellation = request;
+        var stage = project?.Find(asset);
+        bool poolTexture = currentCatalog.SourceOf(asset).Format == "ttpf";
         try
         {
-            poolConversion = PoolWriter.Plan(catalog!, asset, stage.Dds);
-            if (poolConversion.Limitation is { } limitation) EditDetails.Text += $"\n{limitation}";
+            var preview = await Task.Run(() => ReadTexturePreview(currentCatalog, asset, stage, poolTexture, request.Token),
+                request.Token);
+            if (request.IsCancellationRequested || textureCancellation != request) return;
+
+            (textureInfo, originalImage, replacementImage, poolConversion) =
+                (preview.Info, preview.Original, preview.Replacement, preview.Conversion);
+            TextureDetails.Text = preview.Details;
+            EditDetails.Text = preview.EditDetails;
+            ExportDdsButton.Visibility = textureInfo is null ? Visibility.Collapsed : Visibility.Visible;
+            EditPanel.Visibility = Visibility.Visible;
+            EditDetails.Visibility = RevertButton.Visibility = stage is null ? Visibility.Collapsed : Visibility.Visible;
+            ConvertButton.Visibility = stage is not null && poolTexture ? Visibility.Visible : Visibility.Collapsed;
+            ConvertButton.IsEnabled = poolConversion is not null;
+            ShowReplacement.IsEnabled = replacementImage is not null;
+            CompareControls.Visibility = replacementImage is null ? Visibility.Collapsed : Visibility.Visible;
+            RefreshPreview();
+        }
+        catch (OperationCanceledException) when (request.IsCancellationRequested) { }
+        finally
+        {
+            if (textureCancellation == request) textureCancellation = null;
+        }
+    }
+
+    private sealed record TexturePreview(TextureExport? Info, BitmapSource? Original, BitmapSource? Replacement,
+        TextureConversionPlan? Conversion, string Details, string EditDetails);
+
+    private static TexturePreview ReadTexturePreview(Catalog catalog, Asset asset, StagedTexture? stage,
+        bool poolTexture, CancellationToken cancellationToken)
+    {
+        static BitmapSource Decode(byte[] dds)
+        {
+            var bitmap = Bitmap(DdsTextureReader.DecodeTexturePixels(dds));
+            bitmap.Freeze();
+            return bitmap;
+        }
+
+        TextureExport? info = null;
+        BitmapSource? original = null;
+        BitmapSource? replacement = null;
+        TextureConversionPlan? conversion = null;
+        string details;
+        string editDetails = "";
+        try
+        {
+            var (dds, export) = XboxAssets.ReadTexture(catalog, asset, cancellationToken);
+            info = export;
+            original = Decode(dds);
+            details = $"{export.SourceWidth} × {export.SourceHeight} · DXGI {export.SourceFormat}\n" +
+                $"{export.ExportedMips}/{export.SourceMips} mips · starts at {export.BaseMip}";
         }
         catch (Exception error) when (IsAssetError(error))
         {
-            EditDetails.Text += $"\n{error.Message}";
+            details = error.Message;
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (stage is not null)
+        {
+            try
+            {
+                var ddsInfo = DdsTextureReader.Inspect(stage.Dds);
+                editDetails = $"{stage.OriginalFileName}\n{TextureShape.From(ddsInfo)}";
+                if (info is not null && ReplacementProject.Compare(info, ddsInfo).Length != 0)
+                    editDetails += "\nPreview can differ from the final material.";
+                replacement = Decode(stage.Dds);
+            }
+            catch (Exception error) when (IsAssetError(error))
+            {
+                editDetails += $"\nPreview unavailable. {error.Message}";
+            }
+
+            if (poolTexture)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    conversion = PoolWriter.Plan(catalog, asset, stage.Dds, cancellationToken);
+                    if (conversion.Limitation is { } limitation) editDetails += $"\n{limitation}";
+                }
+                catch (Exception error) when (IsAssetError(error))
+                {
+                    editDetails += $"\n{error.Message}";
+                }
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return new(info, original, replacement, conversion, details, editDetails);
     }
 
     private void PreviewModeChanged(object sender, RoutedEventArgs e)
@@ -277,14 +392,21 @@ public partial class Workbench : Window
     {
         var image = ShowReplacement.IsChecked == true ? replacementImage : originalImage;
         var choice = model is not null ? Meshes.SelectedItem as MeshChoice : null;
+        var mesh = choice is null ? null : model!.Meshes[choice.Index];
+        ExportUvButton.IsEnabled = mesh?.TexCoords is { Count: > 0 } uv && uv.Count == mesh.Positions.Count;
         TextureImage.Source = choice is null ? image : null;
         TextureImage.Visibility = choice is null && image is not null ? Visibility.Visible : Visibility.Collapsed;
         Viewport.Visibility = choice is null ? Visibility.Collapsed : Visibility.Visible;
         EmptyPreview.Visibility = choice is null && image is null ? Visibility.Visible : Visibility.Collapsed;
-        ModelScene.Content = choice is null ? null : MeshScene(model!.Meshes[choice.Index], image);
+        bool useVertexColors = mesh is not null && ShowReplacement.IsChecked != true &&
+            links.FirstOrDefault(link => link.Shader == mesh.ShaderIndex)?.NameHash == "0000000082079169";
+        var colors = useVertexColors ? VertexColorPreview.Create(mesh!) : null;
+        PreviewColorDetails.Text = colors is null ? "" : "Preview uses vertex colors with the white diffuse.";
+        ModelScene.Content = mesh is null ? null : MeshScene(mesh, image, colors);
     }
 
-    private static Model3DGroup MeshScene(RageMesh mesh, ImageSource? image)
+    private static Model3DGroup MeshScene(RageMesh mesh, ImageSource? image,
+        (MeshGeometry3D Mesh, BitmapSource Image)? vertexColors)
     {
         var geometry = new MeshGeometry3D
         {
@@ -292,7 +414,12 @@ public partial class Workbench : Window
             TriangleIndices = new(mesh.Indices)
         };
         Brush brush = new SolidColorBrush(Color.FromRgb(123, 144, 152));
-        if (image is not null && mesh.TexCoords is { } uv && uv.Count == mesh.Positions.Count)
+        if (vertexColors is { } colored)
+        {
+            geometry = colored.Mesh;
+            brush = new ImageBrush(colored.Image) { Stretch = Stretch.Fill };
+        }
+        else if (image is not null && mesh.TexCoords is { } uv && uv.Count == mesh.Positions.Count)
         {
             geometry.TextureCoordinates = new(uv.Select(point => new Point(point.X, point.Y)));
             brush = new ImageBrush(image) { TileMode = TileMode.Tile, Stretch = Stretch.Fill };
@@ -377,16 +504,16 @@ public partial class Workbench : Window
     private async Task StageTextureFile(string path, Asset asset)
     {
         await Task.Run(() => project!.Stage(catalog!, asset, path, TextureConversion.Import(path)));
-        LoadTexture(asset);
+        await LoadTextureAsync(asset);
         if (replacementImage is not null) ShowReplacement.IsChecked = true;
         StatusLine.Text = "Replacement staged for this session.";
     }
 
-    private void RevertReplacement(object sender, RoutedEventArgs e)
+    private async void RevertReplacement(object sender, RoutedEventArgs e)
     {
         if (texture is not { } asset || project?.Revert(asset) != true) return;
-        LoadTexture(asset);
-        StatusLine.Text = "Original texture restored.";
+        await LoadTextureAsync(asset);
+        if (texture == asset) StatusLine.Text = "Original texture restored.";
     }
 
     private async void ConvertForPool(object sender, RoutedEventArgs e)
@@ -458,6 +585,7 @@ public partial class Workbench : Window
         if (!busy)
         {
             e.Cancel = !CanDiscard();
+            if (!e.Cancel) textureCancellation?.Cancel();
             return;
         }
 

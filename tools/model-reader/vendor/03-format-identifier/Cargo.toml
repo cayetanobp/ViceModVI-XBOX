@@ -1,0 +1,11 @@
+[package]
+name = "rpf9-identify"
+version = "0.1.0"
+edition = "2021"
+description = "Format identification and decompression of entries from the observed 9FPR (RPF9) inventory"
+license = "Unlicense"
+publish = false
+
+[dependencies]
+rpf9-index = { path = "../02-rpf-index-extractor" }
+rpf-archive = { path = "../01-rpf-decompressor-deserializer" }

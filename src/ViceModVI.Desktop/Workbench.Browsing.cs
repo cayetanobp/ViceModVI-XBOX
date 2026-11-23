@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using RpfPreview.Core;
@@ -232,12 +233,82 @@ public partial class Workbench
         return (exported, failures);
     }
 
-    private async Task ExportOne(Asset asset)
+    private async void ExportUvLayout(object sender, RoutedEventArgs e)
+    {
+        if (selectedAsset is not { } asset || model is null ||
+            Meshes.SelectedItem is not MeshChoice choice) return;
+        var mesh = model.Meshes[choice.Index];
+        if (mesh.TexCoords is not { Count: > 0 } uv || uv.Count != mesh.Positions.Count) return;
+
+        var dialog = new SaveFileDialog
+        {
+            Title = "Export UV layout",
+            Filter = "PNG image|*.png",
+            FileName = $"{ExportName(asset)}_mesh{choice.Index + 1}_uv.png",
+            OverwritePrompt = false
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        await Run("Exporting UV layout…", () =>
+        {
+            WriteUvLayout(mesh, uv, dialog.FileName);
+            StatusLine.Text = $"Exported {Path.GetFileName(dialog.FileName)}.";
+            return Task.CompletedTask;
+        });
+    }
+
+    private static void WriteUvLayout(RageMesh mesh, IReadOnlyList<System.Numerics.Vector2> uv, string path)
+    {
+        const int size = 1024;
+        if (uv.Any(point => !float.IsFinite(point.X) || !float.IsFinite(point.Y)))
+            throw new InvalidDataException("This mesh has invalid UV coordinates.");
+
+        Point Pixel(int index) => new((double)uv[index].X * size, (double)uv[index].Y * size);
+        var lines = new StreamGeometry();
+        using (var geometry = lines.Open())
+        {
+            for (int i = 0; i < mesh.Indices.Count; i += 3)
+            {
+                geometry.BeginFigure(Pixel(mesh.Indices[i]), isFilled: false, isClosed: true);
+                geometry.LineTo(Pixel(mesh.Indices[i + 1]), isStroked: true, isSmoothJoin: false);
+                geometry.LineTo(Pixel(mesh.Indices[i + 2]), isStroked: true, isSmoothJoin: false);
+            }
+        }
+        lines.Freeze();
+
+        var drawing = new DrawingVisual();
+        using (var context = drawing.RenderOpen())
+        {
+            context.PushClip(new RectangleGeometry(new Rect(0, 0, size, size)));
+            context.DrawGeometry(null, new Pen(Brushes.White, 3), lines);
+            context.DrawGeometry(null, new Pen(Brushes.Black, 1), lines);
+            context.Pop();
+        }
+        var bitmap = new RenderTargetBitmap(size, size, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(drawing);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        LocalFiles.Write(path, encoder.Save);
+    }
+
+    private async void ExportModel(object sender, RoutedEventArgs e)
+    {
+        if (model is not null && selectedAsset is { Type: "model" } asset)
+            await ExportOne(asset);
+    }
+
+    private async void ExportTextureDds(object sender, RoutedEventArgs e)
+    {
+        if (textureInfo is not null && texture is { } asset)
+            await ExportOne(asset, ddsOnly: true);
+    }
+
+    private async Task ExportOne(Asset asset, bool ddsOnly = false)
     {
         string filter = asset.Type switch
         {
             "model" => "Wavefront mesh|*.obj",
-            "texture" => "DirectDraw surface|*.dds|PNG preview|*.png",
+            "texture" => ddsOnly ? "DirectDraw surface|*.dds" : "DirectDraw surface|*.dds|PNG preview|*.png",
             _ => "Stored bytes|*.bin"
         };
         var dialog = new SaveFileDialog { Filter = filter, FileName = ExportName(asset), OverwritePrompt = false };
