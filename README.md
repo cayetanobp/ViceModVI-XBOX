@@ -46,7 +46,7 @@ PS5 and PC game assets still need their own format profiles and platform tests.
 
 | Step | What ViceModVI does |
 | --- | --- |
-| **Open** | Use **Open file** for one `.rpf` or `.ttpf`, or **Open folder** to catalog both types together. The viewer reuses cached source indexes when the file size, timestamp, and sampled bytes still match. |
+| **Open** | From the **Open** menu, choose **Open file** for one `.rpf` or `.ttpf`, or **Open folder** to catalog both types together. The viewer reuses cached source indexes when the file size, timestamp, and sampled bytes still match. |
 | **Trace** | Select a mesh and material. When the viewer confirms a diffuse texture by its native key, **View linked texture** jumps to that entry, including in another open archive or pool. The catalog keeps source locators and distinguishes recovered names from aliases. |
 | **Preview and export** | Inspect the texture and its available mips or preview a static model with its resolved diffuse image. Right-click to export. DDS retains the available format and mips, PNG saves the decoded image, and OBJ includes geometry and available UVs. |
 | **Edit a texture** | Use **Edit texture** to import an image and toggle **Original** and **Replacement**. Edits stay in the session. Export a DDS to keep a file, or revert the staged edit. Use the CLI when you need a verified archive copy. |
@@ -92,7 +92,7 @@ $viewer = (Resolve-Path .local/build/bin/ViceModVI.Desktop/release/ViceModVI.Des
 & $viewer
 ```
 
-In the viewer, choose **Open file** or **Open folder**. Select a node in the
+In the **Open** menu, choose **Open file** or **Open folder**. Select a node in the
 source tree to narrow the list and search results. The status bar reports scan
 progress. Closing the viewer during indexing keeps completed source indexes.
 To measure an uncached CLI scan, use `catalog OUTPUT --fresh INPUT`.
@@ -137,14 +137,14 @@ The expected SHA-256 of `core_restofworld.rpf` is
 
 ### Local replacement workflow
 
-1. In the viewer, use **Open folder** to open the sample. Select
+1. In the **Open** menu, choose **Open folder** to open the sample. Select
    `core_restofworld.rpf` in the tree, search for `0:model:203F010`, and select
    the mesh using shader 1.
 2. Choose **View linked texture** to reach entry 90 in
    `data/ttdb/props/ttdb_props.ttpf`. Use **Export selection** from the context
    menu to save the texture as DDS or PNG. Ctrl-select multiple entries to
    export them into one folder.
-3. Expand **Edit texture** and choose **Import replacement**. Toggle
+3. In **Edit texture**, choose **Import replacement**. Toggle
    **Original** and **Replacement** to compare the image in the texture
    preview or on the mesh. Choose **Export staged DDS** to keep the edit as
    a file, or **Revert replacement** to clear it.
@@ -211,7 +211,7 @@ model against it.
 
 ### Experimental TTPF copy
 
-Use `pool-profiles` to find entries with writable storage. In the viewer,
+Use `pool-profiles` to find entries with writable storage. In **Edit texture**,
 **Convert for TTPF export** shows input and output dimensions, DXGI format,
 and mip counts. It exports a compatible DDS and keeps the staged image
 available in the preview. For a TTPF copy, use the CLI.

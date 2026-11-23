@@ -63,6 +63,7 @@ public partial class Workbench : Window
         updating = false;
         FilterChanged(this, new RoutedEventArgs());
         LoadAsset(null);
+        EmptyPreview.Text = "Select a model or texture.";
         int ranges = loaded.Assets.Count(asset => asset.Type == "unknown");
         int models = loaded.Assets.Count(asset => asset.Type == "model");
         StatusLine.Text = $"{models:N0} models · " +
@@ -204,7 +205,6 @@ public partial class Workbench : Window
 
     private void LoadTexture(Asset? asset)
     {
-        if (texture?.Id != asset?.Id) EditPanel.IsExpanded = false;
         texture = asset;
         textureInfo = null;
         poolConversion = null;
@@ -244,11 +244,11 @@ public partial class Workbench : Window
                 if (poolTexture) InspectPoolConversion(asset, stage);
             }
         }
-        EditPanel.Visibility = asset is null ? Visibility.Collapsed : Visibility.Visible;
+        EditMenu.Visibility = asset is null ? Visibility.Collapsed : Visibility.Visible;
         EditDetails.Visibility = stage is null ? Visibility.Collapsed : Visibility.Visible;
-        RevertButton.Visibility = stage is null ? Visibility.Collapsed : Visibility.Visible;
-        ConvertButton.Visibility = stage is not null && poolTexture ? Visibility.Visible : Visibility.Collapsed;
-        ConvertButton.IsEnabled = poolConversion is not null;
+        RevertAction.Visibility = stage is null ? Visibility.Collapsed : Visibility.Visible;
+        ConvertAction.Visibility = stage is not null && poolTexture ? Visibility.Visible : Visibility.Collapsed;
+        ConvertAction.IsEnabled = poolConversion is not null;
         ShowReplacement.IsEnabled = replacementImage is not null;
         CompareControls.Visibility = replacementImage is null ? Visibility.Collapsed : Visibility.Visible;
         if (replacementImage is null) ShowOriginal.IsChecked = true;

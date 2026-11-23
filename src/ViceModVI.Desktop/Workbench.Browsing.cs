@@ -68,8 +68,9 @@ public partial class Workbench
         rows = loaded.Assets.Select(asset => new AssetRow(asset, paths[asset.SourceId], locations[asset.SourceId])).ToArray();
         SourceTree.Items.Add(rootNode);
         rootNode.IsExpanded = true;
-        rootNode.IsSelected = true;
-        SetScope(Scope(rootNode));
+        var initialNode = folder is null && sourceNodes.Count == 1 ? sourceNodes.Values.Single() : rootNode;
+        initialNode.IsSelected = true;
+        SetScope(Scope(initialNode));
     }
 
     private static string? CommonFolder(IReadOnlyList<Source> sources)
