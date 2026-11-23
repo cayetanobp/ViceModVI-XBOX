@@ -3,15 +3,16 @@
 
 use std::path::{Path, PathBuf};
 
-use rpf9_explorer::{
-    rds5_writer,
-    ttpf::{TtpfIndex, TtpfInfo, TtpfTextureInfo},
-};
 use serde::Serialize;
 
 use crate::{
     catalog::{Asset, Catalog, Fingerprint, Source},
-    dds, files,
+    files,
+    native::{
+        dds,
+        pool::{PoolIndex, PoolInfo, PoolTexture},
+        pool_copy,
+    },
     texture_conversion::{self, TextureConversionPlan, TextureShape},
     util::{eq_ignore_case, full_path, path_text},
     xbox_assets::key,
@@ -40,12 +41,12 @@ pub fn plan(catalog: &Catalog, asset: &Asset, dds_bytes: &[u8], cancel: &Cancel)
     let (source, index) = locate(catalog, asset)?;
     let mut input = source.open()?;
     source.fingerprint.check(source.path(), &mut input, false)?;
-    let pool = TtpfIndex::read(source.path(), cancel)?;
+    let pool = PoolIndex::read(source.path(), cancel)?;
     let texture = find_texture(asset, &pool.info, index)?;
     plan_texture(texture, dds_bytes)
 }
 
-fn plan_texture(texture: &TtpfTextureInfo, dds_bytes: &[u8]) -> Result<TextureConversionPlan> {
+fn plan_texture(texture: &PoolTexture, dds_bytes: &[u8]) -> Result<TextureConversionPlan> {
     let mut limitation = texture.limitation.clone();
     if !texture.supports_native_replacement && limitation.is_none() {
         limitation = Some(if texture.partial_mips() {
@@ -71,7 +72,7 @@ fn locate<'a>(catalog: &'a Catalog, asset: &Asset) -> Result<(&'a Source, i32)> 
     }
 }
 
-fn find_texture<'a>(asset: &Asset, pool: &'a TtpfInfo, index: i32) -> Result<&'a TtpfTextureInfo> {
+fn find_texture<'a>(asset: &Asset, pool: &'a PoolInfo, index: i32) -> Result<&'a PoolTexture> {
     let mut found = pool.textures.iter().filter(|t| t.index == index);
     let texture = match (found.next(), found.next()) {
         (Some(texture), None) => texture,
@@ -135,7 +136,7 @@ pub fn copy(
         let mut input = source.open()?;
         source.fingerprint.check(source.path(), &mut input, true)?;
     }
-    let pool = TtpfIndex::read(source.path(), cancel)?;
+    let pool = PoolIndex::read(source.path(), cancel)?;
     let selected = find_texture(asset, &pool.info, index)?.clone();
     let conversion = plan_texture(&selected, dds_bytes)?;
     let prepared = texture_conversion::apply(dds_bytes, &conversion, allow_resize)?;
@@ -150,8 +151,8 @@ pub fn copy(
     let original = pool.create_dds(index, cancel)?;
     let adjacent = pool.create_dds(neighbor.index, cancel)?;
     let scratch = ScratchPath::beside(&output, ".ttpf")?;
-    let result = rds5_writer::export_replacement_copy(source.path(), index, &prepared, scratch.path(), cancel)?;
-    let reopened = TtpfIndex::read(scratch.path(), cancel)?;
+    let result = pool_copy::write(source.path(), index, &prepared, scratch.path(), cancel)?;
+    let reopened = PoolIndex::read(scratch.path(), cancel)?;
     let same_key = reopened.info.textures.iter().find(|t| t.index == index).is_some_and(|t| t.asset_key == selected.asset_key);
     if reopened.info.textures.len() != pool.info.textures.len() || !same_key {
         return Err(Error::invalid("The copy's texture index changed."));

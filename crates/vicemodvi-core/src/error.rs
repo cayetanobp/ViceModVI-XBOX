@@ -72,19 +72,6 @@ impl From<serde_json::Error> for Error {
     }
 }
 
-impl From<rpf9_explorer::Error> for Error {
-    fn from(error: rpf9_explorer::Error) -> Self {
-        use rpf9_explorer::Error as E;
-        match error {
-            E::InvalidData(m) => Self::InvalidData(m),
-            E::NotSupported(m) => Self::NotSupported(m),
-            E::OutOfRange(m) => Self::Argument(m),
-            E::Io(e) => Self::Io(e),
-            E::Cancelled => Self::Cancelled,
-        }
-    }
-}
-
 impl From<image::ImageError> for Error {
     fn from(error: image::ImageError) -> Self {
         Self::InvalidData(error.to_string())

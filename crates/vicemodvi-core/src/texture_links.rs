@@ -6,8 +6,8 @@ use serde::Serialize;
 
 use crate::{
     catalog::{Asset, Catalog},
-    model_texture_bindings::{color_textures, ModelColorTexture},
-    rage_model::RageModel,
+    native::slots::{color_textures, ColorTexture},
+    native::model::Model,
     xbox_assets::key,
     Result,
 };
@@ -62,7 +62,7 @@ impl TextureIndex {
     }
 }
 
-pub fn resolve_model(catalog: &Catalog, index: &TextureIndex, asset: &Asset, model: &RageModel) -> Result<Vec<TextureLink>> {
+pub fn resolve_model(catalog: &Catalog, index: &TextureIndex, asset: &Asset, model: &Model) -> Result<Vec<TextureLink>> {
     let mut links = Vec::new();
     for material in model.materials.iter().flatten() {
         for slot in color_textures(material) {
@@ -72,7 +72,7 @@ pub fn resolve_model(catalog: &Catalog, index: &TextureIndex, asset: &Asset, mod
     Ok(links)
 }
 
-pub fn resolve(catalog: &Catalog, index: &TextureIndex, model: &Asset, shader: i32, slot: &ModelColorTexture) -> Result<TextureLink> {
+pub fn resolve(catalog: &Catalog, index: &TextureIndex, model: &Asset, shader: i32, slot: &ColorTexture) -> Result<TextureLink> {
     let reference = &slot.reference;
     let native_key = key(Some(reference.opaque_id64));
     let hash = key(Some(reference.name_hash() as u64));

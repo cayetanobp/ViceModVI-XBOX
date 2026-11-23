@@ -154,11 +154,11 @@ fn rpf_model_decode_and_obj_export() {
     assert_eq!(links[0].name_hash.as_deref(), Some("000000000BADF00D"));
     let obj = dir.path().join("prop.obj");
     match xbox_assets::export(&catalog, asset, &obj).unwrap() {
-        ExportResult::Mesh(export) => assert_eq!((export.vertices, export.faces, export.decoder.as_str()), (3, 1, "RageModelDecoder")),
+        ExportResult::Mesh(export) => assert_eq!((export.vertices, export.faces, export.decoder.as_str()), (3, 1, "ViceModVI drawable reader")),
         other => panic!("{other:?}"),
     }
     let text = std::fs::read_to_string(&obj).unwrap();
     assert!(text.contains("f 1/1 2/2 3/3"), "{text}");
-    let parsed = vicemodvi_core::obj_reader::parse(&text, "x").unwrap();
+    let parsed = vicemodvi_core::obj::parse(&text, "x").unwrap();
     assert_eq!(parsed.meshes[0].positions, mesh.positions);
 }

@@ -10,14 +10,13 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-# Pinned rpf9-explorer Core port. It lives in the git-ignored .local folder
-# until upstream grants permission. See README.md.
-rpf9-explorer = { path = "../../.local/rpf9-explorer-rs" }
 rpf9-identify = { path = "../../tools/model-reader/vendor/03-format-identifier" }
 rpf9-index = { path = "../../tools/model-reader/vendor/02-rpf-index-extractor" }
 rpf9-models = { path = "../../tools/model-reader/vendor/04-resource-readers/models" }
 
+adler2 = "2"
 base64 = "0.22"
+bcdec_rs = "0.2"
 block_compression = { version = "0.11", default-features = false, features = ["bc7"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }

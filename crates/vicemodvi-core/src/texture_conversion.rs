@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 
 use crate::{
-    dds::{self, DdsTextureInfo},
+    dds::{self, DdsInfo},
     resample::{self, Filter, Image},
     util::extension,
     Error, Result,
@@ -30,7 +30,7 @@ impl TextureShape {
         Self { width, height, dxgi_format, mips }
     }
 
-    pub fn from_dds(texture: &DdsTextureInfo) -> Self {
+    pub fn from_dds(texture: &DdsInfo) -> Self {
         Self::new(texture.width, texture.height, texture.dxgi_format, texture.mips)
     }
 }
@@ -94,11 +94,9 @@ pub fn import(path: &Path) -> Result<Vec<u8>> {
     if bytes.starts_with(b"DDS ") {
         return match dds::inspect(&bytes) {
             Ok(_) => Ok(bytes),
-            Err(rpf9_explorer::Error::NotSupported(_)) => read_raster(&bytes, Raster::Image(ImageFormat::Dds)),
-            Err(rpf9_explorer::Error::InvalidData(message)) if message == "Unsupported BC format." => {
-                read_raster(&bytes, Raster::Image(ImageFormat::Dds))
-            }
-            Err(error) => Err(error.into()),
+            // Formats this reader does not handle may still decode as images.
+            Err(Error::NotSupported(_)) => read_raster(&bytes, Raster::Image(ImageFormat::Dds)),
+            Err(error) => Err(error),
         };
     }
     let ext = extension(path);
@@ -275,7 +273,7 @@ fn is_bc(dxgi: i32) -> bool {
     matches!(dxgi, 70..=84 | 94..=99)
 }
 
-fn dds_element_size(info: &DdsTextureInfo) -> i32 {
+fn dds_element_size(info: &DdsInfo) -> i32 {
     let block = if is_bc(info.dxgi_format) { 4 } else { 1 };
     info.subresources[0].row_bytes / ((info.width + block - 1) / block)
 }

@@ -5,7 +5,7 @@ use eframe::{
     egui_wgpu::{self, wgpu, wgpu::util::DeviceExt},
 };
 use glam::{Mat4, Vec3};
-use vicemodvi_core::RageMesh;
+use vicemodvi_core::Mesh;
 
 const SAMPLES: u32 = 4;
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -121,7 +121,7 @@ impl Default for Camera {
 
 impl Camera {
     /// Frames the mesh bounds from the default viewing angle.
-    pub fn fit(&mut self, mesh: &RageMesh) {
+    pub fn fit(&mut self, mesh: &Mesh) {
         let mut min = Vec3::splat(f32::INFINITY);
         let mut max = Vec3::splat(f32::NEG_INFINITY);
         for p in &mesh.positions {
@@ -340,7 +340,7 @@ impl Viewer {
         texture.create_view(&Default::default())
     }
 
-    pub fn set_mesh(&mut self, state: &egui_wgpu::RenderState, key: &str, mesh: &RageMesh, colors: bool) {
+    pub fn set_mesh(&mut self, state: &egui_wgpu::RenderState, key: &str, mesh: &Mesh, colors: bool) {
         let key = format!("{key}|{colors}");
         if self.mesh.as_ref().is_some_and(|m| m.key == key) {
             return;
@@ -502,7 +502,7 @@ impl Viewer {
 }
 
 /// Smooth normals: area-weighted face normals summed per vertex.
-fn vertex_normals(mesh: &RageMesh) -> Vec<[f32; 3]> {
+fn vertex_normals(mesh: &Mesh) -> Vec<[f32; 3]> {
     let mut sums = vec![Vec3::ZERO; mesh.positions.len()];
     for face in mesh.indices.as_chunks::<3>().0 {
         let [a, b, c] = [face[0] as usize, face[1] as usize, face[2] as usize];

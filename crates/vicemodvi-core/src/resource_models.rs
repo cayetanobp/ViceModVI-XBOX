@@ -21,7 +21,7 @@ use rpf9_models::{decode_geometry, drawables};
 use crate::{
     catalog::{Asset, ByteRange, Source},
     drawable_materials,
-    rage_model::{RageMesh, RageModel},
+    native::model::{Mesh, Model},
     util::eq_ignore_case,
     xbox_assets::IndexProgress,
     Cancel, Error, Result,
@@ -214,7 +214,7 @@ pub fn add_drawables(source: &Source, assets: &mut Vec<Asset>, rows: &[DrawableR
 }
 
 /// Decodes the static geometry and materials of a listed drawable.
-pub fn read(source: &Source, asset: &Asset) -> Result<RageModel> {
+pub fn read(source: &Source, asset: &Asset) -> Result<Model> {
     let value = asset.drawable_locator.as_deref().ok_or_else(|| Error::invalid("Invalid drawable data."))?;
     let (index, virt, phys, meshes) = guarded(|| {
         let mut input = BufReader::new(File::open(&source.path)?);
@@ -274,7 +274,7 @@ pub fn read(source: &Source, asset: &Asset) -> Result<RageModel> {
         if mesh.uv0.as_ref().is_some_and(|uv| uv.len() != vertices) {
             return Err(Error::invalid("Invalid drawable mesh lengths."));
         }
-        parts.push(RageMesh {
+        parts.push(Mesh {
             name: format!("Mesh {}", part + 1),
             positions: mesh.positions,
             indices,
@@ -283,7 +283,7 @@ pub fn read(source: &Source, asset: &Asset) -> Result<RageModel> {
             shader_index: Some(mesh.shader as i32),
         });
     }
-    let mut model = RageModel::new(asset.name.clone(), parts, min, max);
+    let mut model = Model::new(asset.name.clone(), parts, min, max);
     model.materials = Some(materials);
     model.presentation_note = Some("Static geometry from Resource Tools.".into());
     Ok(model)

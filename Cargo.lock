@@ -2995,17 +2995,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rpf9-explorer"
-version = "0.1.0"
-dependencies = [
- "adler2",
- "bcdec_rs",
- "flate2",
- "half",
- "sha2",
-]
-
-[[package]]
 name = "rpf9-identify"
 version = "0.1.0"
 dependencies = [
@@ -3782,7 +3771,9 @@ dependencies = [
 name = "vicemodvi-core"
 version = "0.2.0"
 dependencies = [
+ "adler2",
  "base64",
+ "bcdec_rs",
  "block_compression",
  "chrono",
  "flate2",
@@ -3790,7 +3781,6 @@ dependencies = [
  "image",
  "psd",
  "rayon",
- "rpf9-explorer",
  "rpf9-identify",
  "rpf9-index",
  "rpf9-models",

@@ -15,20 +15,20 @@ use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
 
-use rpf9_explorer::{
-    rage_texture::{self, RageTextureInfo},
-    recovery::{self, RecoveredResource},
-    ttpf::TtpfIndex,
-};
-
 use crate::{
     cache,
     catalog::{Asset, ByteRange, Catalog, Fingerprint, Source},
-    dds, files,
-    rage_model::{self, RageModel},
+    files,
+    native::{
+        dds,
+        dictionary::{self, DictionaryTexture},
+        drawable, model,
+        pool::PoolIndex,
+        scan::{self, Recovered},
+    },
     resource_models,
     util::{full_path, parse_number, path_text},
-    zlib, Cancel, Error, RageTexturePixels, Result,
+    zlib, Cancel, Error, Model, Result,
 };
 
 const MAX_RESOURCE_BYTES: i64 = 256 * 1024 * 1024;
@@ -217,7 +217,7 @@ fn build_source(
     let mut assets = Vec::new();
     if format == "ttpf" {
         report(IndexProgress::new("Reading texture table", 0, 0, "entries"));
-        let index = TtpfIndex::read(file_path, cancel)?;
+        let index = PoolIndex::read(file_path, cancel)?;
         let total = index.info.textures.len();
         for (read, texture) in index.info.textures.iter().enumerate() {
             if read % 1024 == 0 {
@@ -317,7 +317,7 @@ fn scan_rpf(source: &Source, assets: &mut Vec<Asset>, candidates: &[i64], report
     let batches: Vec<&[i64]> = candidates.chunks(BATCH).collect();
 
     let models = recover_batches(&batches, "Validating model candidates", candidates.len(), report, cancel, |batch| {
-        recovery::recover_models_at_offsets(path, length, batch, cancel)
+        scan::recover_models(path, length, batch, cancel)
     })?;
     for entry in models.into_iter().flatten() {
         let mut asset = locator(source, &entry, "model");
@@ -334,7 +334,7 @@ fn scan_rpf(source: &Source, assets: &mut Vec<Asset>, candidates: &[i64], report
     }
 
     let dictionaries = recover_batches(&batches, "Validating texture candidates", candidates.len(), report, cancel, |batch| {
-        recovery::recover_textures_at_offsets(path, length, batch, cancel)
+        scan::recover_dictionaries(path, length, batch, cancel)
     })?;
     for entry in dictionaries.into_iter().flatten() {
         let asset = locator(source, &entry, "dictionary");
@@ -354,7 +354,7 @@ fn recover_batches<T: Send>(
     total: usize,
     report: &(dyn Fn(IndexProgress) + Sync),
     cancel: &Cancel,
-    recover: impl Fn(&[i64]) -> rpf9_explorer::Result<Vec<T>> + Sync,
+    recover: impl Fn(&[i64]) -> Result<Vec<T>> + Sync,
 ) -> Result<Vec<Vec<T>>> {
     report(IndexProgress::new(phase, 0, total as i64, "entries"));
     let completed = AtomicUsize::new(0);
@@ -371,7 +371,7 @@ fn recover_batches<T: Send>(
     results.into_iter().collect()
 }
 
-fn locator<T>(source: &Source, entry: &RecoveredResource<T>, kind: &str) -> Asset {
+fn locator<T>(source: &Source, entry: &Recovered<T>, kind: &str) -> Asset {
     let segments: Vec<ByteRange> = entry
         .segments
         .iter()
@@ -385,7 +385,7 @@ fn locator<T>(source: &Source, entry: &RecoveredResource<T>, kind: &str) -> Asse
     asset
 }
 
-fn texture_child(source: &Source, parent: &str, texture: &RageTextureInfo, evidence: &str) -> Asset {
+fn texture_child(source: &Source, parent: &str, texture: &DictionaryTexture, evidence: &str) -> Asset {
     let alias = texture.name.get(..8).is_some_and(|p| p.eq_ignore_ascii_case("texture_"));
     let mut asset = Asset::new(
         format!("{parent}:texture:{}", texture.index),
@@ -440,7 +440,7 @@ fn split(data: &[u8], asset: &Asset) -> Result<(usize, usize)> {
     Ok((system, data.len()))
 }
 
-pub fn read_model(catalog: &Catalog, asset: &Asset) -> Result<RageModel> {
+pub fn read_model(catalog: &Catalog, asset: &Asset) -> Result<Model> {
     if asset.kind != "model" {
         return Err(Error::invalid("Select a validated model."));
     }
@@ -452,7 +452,7 @@ pub fn read_model(catalog: &Catalog, asset: &Asset) -> Result<RageModel> {
     }
     let data = decode_segments(&mut file, asset, &Cancel::none())?;
     let (system, _) = split(&data, asset)?;
-    rage_model::decode(&data[..system], &data[system..]).ok_or_else(|| Error::invalid("Model structure failed validation."))
+    drawable::decode(&data[..system], &data[system..]).ok_or_else(|| Error::invalid("Model structure failed validation."))
 }
 
 /// Reads a texture as DDS: the native mip chain for pools and dictionaries,
@@ -467,7 +467,7 @@ pub fn read_texture(catalog: &Catalog, asset: &Asset, cancel: &Cancel) -> Result
     source.fingerprint.check(source.path(), &mut file, false)?;
     let (dds_bytes, width, height, source_format, source_mips, base_mip, decoder);
     if source.format == "ttpf" {
-        let pool = TtpfIndex::read(source.path(), cancel)?;
+        let pool = PoolIndex::read(source.path(), cancel)?;
         let texture = pool
             .info
             .textures
@@ -480,7 +480,7 @@ pub fn read_texture(catalog: &Catalog, asset: &Asset, cancel: &Cancel) -> Result
         dds_bytes = pool.create_dds(index, cancel)?;
         (width, height, source_format, source_mips, base_mip) =
             (texture.width, texture.height, texture.dxgi_format, texture.source_mips, texture.base_mip_level);
-        decoder = "TtpfReader";
+        decoder = "ViceModVI pool reader";
     } else {
         let parent = catalog.get(asset.parent_id.as_deref().ok_or_else(|| Error::invalid("Missing RPF texture container."))?)?;
         let data = decode_segments(&mut file, parent, cancel)?;
@@ -489,7 +489,7 @@ pub fn read_texture(catalog: &Catalog, asset: &Asset, cancel: &Cancel) -> Result
         let (system, graphics) = data.split_at(system_length);
         let dictionary_offset = if parent.kind == "model" {
             Some(
-                rage_model::decode(system, graphics)
+                drawable::decode(system, graphics)
                     .and_then(|m| m.embedded_texture_dictionary_offset)
                     .ok_or_else(|| Error::invalid("Embedded texture dictionary is unavailable."))?,
             )
@@ -497,8 +497,8 @@ pub fn read_texture(catalog: &Catalog, asset: &Asset, cancel: &Cancel) -> Result
             None
         };
         let dictionary = match dictionary_offset {
-            Some(start) => rage_texture::inspect_embedded_dictionary(system, graphics.len() as i64, start as i64),
-            None => rage_texture::inspect(system, graphics),
+            Some(start) => dictionary::inspect_embedded_dictionary(system, graphics.len() as i64, start as i64),
+            None => dictionary::inspect(system, graphics),
         };
         let texture = dictionary
             .and_then(|d| d.textures.into_iter().find(|t| t.index == index))
@@ -508,14 +508,14 @@ pub fn read_texture(catalog: &Catalog, asset: &Asset, cancel: &Cancel) -> Result
         }
         if let Some(at) = dictionary_offset {
             base_mip = texture.preview_mip_level();
-            let pixels = rage_texture::decode_embedded_texture_pixels(system, graphics, at as i64, index, base_mip)?;
-            dds_bytes = create_preview_dds(&pixels);
+            let pixels = dictionary::decode_embedded_texture_pixels(system, graphics, at as i64, index, base_mip)?;
+            dds_bytes = dds::from_pixels(&pixels);
         } else {
             base_mip = 0;
-            dds_bytes = rage_texture::create_dds(system, graphics, index)?;
+            dds_bytes = dictionary::create_dds(system, graphics, index)?;
         }
         (width, height, source_format, source_mips) = (texture.width, texture.height, texture.dxgi_format, texture.mip_count);
-        decoder = "RageTextureDecoder";
+        decoder = "ViceModVI dictionary reader";
     }
     cancel.check()?;
     let info = dds::inspect(&dds_bytes)?;
@@ -539,21 +539,6 @@ pub fn read_texture(catalog: &Catalog, asset: &Asset, cancel: &Cancel) -> Result
     Ok((dds_bytes, export))
 }
 
-/// One-mip B8G8R8A8 DDS for decoded preview pixels.
-pub fn create_preview_dds(pixels: &RageTexturePixels) -> Vec<u8> {
-    let mut out = Vec::with_capacity(148 + pixels.bgra32.len());
-    out.extend_from_slice(b"DDS ");
-    for field in [124, 0x100F, pixels.height, pixels.width, pixels.width * 4, 0, 1] {
-        out.extend_from_slice(&field.to_le_bytes());
-    }
-    out.extend_from_slice(&[0u8; 44]);
-    for field in [32i32, 4, 0x3031_5844, 0, 0, 0, 0, 0, 0x1000, 0, 0, 0, 0, 87, 3, 0, 1, 0] {
-        out.extend_from_slice(&field.to_le_bytes());
-    }
-    out.extend_from_slice(&pixels.bgra32);
-    out
-}
-
 /// Exports a texture as DDS or a model as OBJ.
 pub fn export(catalog: &Catalog, asset: &Asset, output: &Path) -> Result<ExportResult> {
     if asset.kind == "texture" {
@@ -562,14 +547,14 @@ pub fn export(catalog: &Catalog, asset: &Asset, output: &Path) -> Result<ExportR
         return Ok(ExportResult::Texture(info));
     }
     let model = read_model(catalog, asset)?;
-    let obj = rage_model::create_obj(&model);
+    let obj = model::to_obj(&model);
     files::write(output, |w| Ok(w.write_all(obj.as_bytes())?), false)?;
     Ok(ExportResult::Mesh(MeshExport {
         vertices: model.meshes.iter().map(|m| m.positions.len() as i64).sum(),
         faces: model.meshes.iter().map(|m| m.indices.len() as i64).sum::<i64>() / 3,
         meshes: model.meshes.len() as i64,
         materials: model.materials.as_ref().map_or(0, |m| m.len() as i64),
-        decoder: if asset.drawable_locator.is_none() { "RageModelDecoder" } else { "Resource Tools" }.to_string(),
+        decoder: if asset.drawable_locator.is_none() { "ViceModVI drawable reader" } else { "Resource Tools" }.to_string(),
         coverage: "static geometry and available UVs".to_string(),
     }))
 }

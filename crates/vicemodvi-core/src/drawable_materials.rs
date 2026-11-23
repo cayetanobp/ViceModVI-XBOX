@@ -1,7 +1,7 @@
 //! Shader texture references of drawables listed by the Resource Tools reader.
 
 use crate::{
-    rage_model::{RageMaterial, RageTextureReference},
+    native::model::{Material, TextureRef},
     Error, Result,
 };
 
@@ -49,14 +49,14 @@ impl Reader<'_> {
 
 /// Reads the materials of the drawable at `drawable`. Unknown shader layouts
 /// are skipped; a drawable with an unknown layout returns no materials.
-pub fn read(data: &[u8], drawable: i64) -> Vec<RageMaterial> {
+pub fn read(data: &[u8], drawable: i64) -> Vec<Material> {
     let reader = Reader { data };
     let mut materials = Vec::new();
     let _ = read_into(&reader, drawable, &mut materials);
     materials
 }
 
-fn read_into(r: &Reader, drawable: i64, materials: &mut Vec<RageMaterial>) -> Result<()> {
+fn read_into(r: &Reader, drawable: i64, materials: &mut Vec<Material>) -> Result<()> {
     let group = r.pointer(drawable + 16, 64)?;
     let count = r.u16(group + 24)? as i64;
     if !(1..=512).contains(&count) || count != r.u16(group + 26)? as i64 {
@@ -73,7 +73,7 @@ fn read_into(r: &Reader, drawable: i64, materials: &mut Vec<RageMaterial>) -> Re
     Ok(())
 }
 
-fn read_shader(r: &Reader, shaders: i64, i: i64) -> Result<Option<RageMaterial>> {
+fn read_shader(r: &Reader, shaders: i64, i: i64) -> Result<Option<Material>> {
     let shader = r.pointer(shaders + i * 8, 64)?;
     let hash = r.u32(shader)?;
     let preset = r.u32(shader + 4)?;
@@ -119,7 +119,7 @@ fn read_shader(r: &Reader, shaders: i64, i: i64) -> Result<Option<RageMaterial>>
         {
             continue;
         }
-        refs.push(RageTextureReference {
+        refs.push(TextureRef {
             parameter_hash: r.u32(parameter)?,
             texture_index: slot as i32,
             system_offset: texture as i32,
@@ -129,7 +129,7 @@ fn read_shader(r: &Reader, shaders: i64, i: i64) -> Result<Option<RageMaterial>>
             tag: 6,
         });
     }
-    Ok(Some(RageMaterial {
+    Ok(Some(Material {
         shader_index: i as i32,
         shader_hash: hash,
         preset_hash: preset,

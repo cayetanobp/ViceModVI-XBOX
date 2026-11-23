@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     catalog::{Asset, Catalog},
-    dds::{self, DdsTextureInfo},
+    dds::{self, DdsInfo},
     files,
     util::{eq_ignore_case, full_path, path_text},
     xbox_assets::TextureExport,
@@ -161,7 +161,7 @@ impl ReplacementProject {
         Ok(())
     }
 
-    pub fn compare(original: &TextureExport, replacement: &DdsTextureInfo) -> Vec<TextureDifference> {
+    pub fn compare(original: &TextureExport, replacement: &DdsInfo) -> Vec<TextureDifference> {
         [
             (
                 "Dimensions",

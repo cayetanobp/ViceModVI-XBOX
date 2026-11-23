@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use vicemodvi_core::{
     catalog::Catalog,
-    dds, files, manifests, obj_reader, pool_writer, rpf_copy,
+    dds, files, manifests, obj, pool_writer, rpf_copy,
     texture_conversion,
     texture_links::{self, TextureIndex},
     util::{eq_ignore_case, full_path, parse_number, path_text},
@@ -255,7 +255,7 @@ fn run(args: &[&str]) -> Result<Outcome> {
         }
         ["inspect", file] if vicemodvi_core::util::extension(path(file)) == ".obj" => {
             let text = std::fs::read_to_string(file)?;
-            let model = obj_reader::parse(&text, "Imported OBJ")?;
+            let model = obj::parse(&text, "Imported OBJ")?;
             print(&json!({
                 "vertices": model.meshes.iter().map(|m| m.positions.len()).sum::<usize>(),
                 "faces": model.meshes.iter().map(|m| m.indices.len()).sum::<usize>() / 3,

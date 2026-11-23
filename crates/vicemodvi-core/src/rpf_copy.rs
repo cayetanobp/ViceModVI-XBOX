@@ -8,17 +8,18 @@ use std::{
     path::Path,
 };
 
-use rpf9_explorer::{native_replacement, rage_texture};
+
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::{
     catalog::{ByteRange, Catalog},
-    dds, files,
+    files,
     pool_writer::ScratchPath,
     texture_conversion::{self, TextureConversionPlan, TextureShape},
     util::{full_path, hex_upper},
     xbox_assets::{decode_segments, key},
+    native::{dds, dictionary},
     zlib, Asset, Cancel, Error, Result,
 };
 
@@ -65,7 +66,7 @@ pub fn copy(catalog: &Catalog, asset: &Asset, dds_bytes: &[u8], destination: &Pa
         return Err(Error::invalid("Invalid resource section lengths."));
     }
     let (system, graphics) = original.split_at(system_size);
-    let dictionary = rage_texture::inspect(system, graphics).ok_or_else(|| Error::invalid("The source texture dictionary failed validation."))?;
+    let dictionary = dictionary::inspect(system, graphics).ok_or_else(|| Error::invalid("The source texture dictionary failed validation."))?;
     let texture = dictionary
         .textures
         .iter()
@@ -77,10 +78,10 @@ pub fn copy(catalog: &Catalog, asset: &Asset, dds_bytes: &[u8], destination: &Pa
     let limitation = (texture.dimension != 1 || texture.depth != 1).then(|| "The experimental RPF9 writer supports single 2D textures.".to_string());
     let plan = texture_conversion::plan(dds_bytes, TextureShape::new(texture.width, texture.height, texture.dxgi_format, texture.mip_count), limitation)?;
     let expected_dds = texture_conversion::apply(dds_bytes, &plan, allow_resize)?;
-    let staged = native_replacement::stage(system, graphics, index, &expected_dds, cancel)?;
+    let staged = dictionary::stage(system, graphics, index, &expected_dds, cancel)?;
     let patches = prepare_patches(segments, &original, &staged.resource_data)?;
     let neighbor = dictionary.textures.iter().filter(|t| t.index != index).min_by_key(|t| (t.index - index).abs());
-    let neighbor_dds = neighbor.map(|n| rage_texture::create_dds(system, graphics, n.index)).transpose()?;
+    let neighbor_dds = neighbor.map(|n| dictionary::create_dds(system, graphics, n.index)).transpose()?;
     let input_length = input.metadata()?.len() as i64;
 
     let scratch = ScratchPath::beside(&destination, ".rpf")?;
@@ -105,9 +106,9 @@ pub fn copy(catalog: &Catalog, asset: &Asset, dds_bytes: &[u8], destination: &Pa
         let digest = check_copy(&mut input, &mut reopened, &patches, cancel)?;
         let raw = decode_segments(&mut reopened, parent, cancel)?;
         let (reopened_system, reopened_graphics) = raw.split_at(system_size);
-        let actual = rage_texture::create_dds(reopened_system, reopened_graphics, index)?;
+        let actual = dictionary::create_dds(reopened_system, reopened_graphics, index)?;
         let neighbor_matches = match (neighbor, &neighbor_dds) {
-            (Some(n), Some(expected)) => &rage_texture::create_dds(reopened_system, reopened_graphics, n.index)? == expected,
+            (Some(n), Some(expected)) => &dictionary::create_dds(reopened_system, reopened_graphics, n.index)? == expected,
             _ => true,
         };
         if reopened_system != system || raw != staged.resource_data || payload(&actual)? != payload(&expected_dds)? || !neighbor_matches {

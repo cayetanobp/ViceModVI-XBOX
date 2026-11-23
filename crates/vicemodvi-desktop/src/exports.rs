@@ -3,7 +3,7 @@
 use std::{io::Cursor, path::Path};
 
 use vicemodvi_core::{
-    files, xbox_assets, Asset, Catalog, Error, RageMesh, RageTexturePixels, Result,
+    files, xbox_assets, Asset, Catalog, Error, Mesh, Pixels, Result,
 };
 
 use crate::browse::export_name;
@@ -51,7 +51,7 @@ fn png_bytes(width: u32, height: u32, rgba: Vec<u8>) -> Result<Vec<u8>> {
     Ok(out.into_inner())
 }
 
-pub fn write_png(pixels: &RageTexturePixels, path: &Path) -> Result<()> {
+pub fn write_png(pixels: &Pixels, path: &Path) -> Result<()> {
     let mut rgba = pixels.bgra32.clone();
     for p in rgba.as_chunks_mut::<4>().0 {
         p.swap(0, 2);
@@ -61,7 +61,7 @@ pub fn write_png(pixels: &RageTexturePixels, path: &Path) -> Result<()> {
 
 /// 1024×1024 transparent PNG with each triangle outlined: a 3 px white line
 /// under a 1 px black line.
-pub fn write_uv_layout(mesh: &RageMesh, path: &Path) -> Result<()> {
+pub fn write_uv_layout(mesh: &Mesh, path: &Path) -> Result<()> {
     const SIZE: usize = 1024;
     let uv = mesh.tex_coords.as_ref().filter(|uv| !uv.is_empty() && uv.len() == mesh.positions.len()).ok_or_else(|| Error::invalid("This mesh has no UV coordinates."))?;
     if uv.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {

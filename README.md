@@ -70,22 +70,10 @@ executables. No .NET runtime or separate DLL is required. For the sample CLI
 walkthrough, you also need Python 3 and Leonida's `rpf9_carve.py`, or a
 compatible inventory TSV.
 
-Run from the ViceModVI-XBOX repository root. The build expects the Rust port of
-the pinned rpf9-explorer Core reader at `.local/rpf9-explorer-rs`. Git ignores
-that folder.
-
-<details>
-<summary>About the pinned rpf9-explorer reader</summary>
-
-The port follows rpf9-explorer revision
-`48557ead00601d3757ba12b894f2595c4faad2a5` with
-`tools/rpf9-explorer-compact-a8.patch` applied. It covers the TTPF, RDS5,
-texture dictionary, DDS, drawable, OBJ, and recovery readers that ViceModVI
-uses. The upstream revision lacks a repository-level license, so the port stays
-out of the repository and out of distributable builds until upstream grants
-permission. See [License](#license).
-
-</details>
+Run from the ViceModVI-XBOX repository root. The readers and writers for the
+native formats (DDS, TTPF/RDS5 pools, RPF9 texture dictionaries and drawables,
+OBJ, and resource recovery) are ViceModVI's own code in
+`crates/vicemodvi-core/src/native`.
 
 ```powershell
 cargo build --release
@@ -287,6 +275,4 @@ SHA-256. The copy preserves the archive size and directory bytes.
 ## License
 
 ViceModVI's own code is released under the [GNU GPL v3 or later](LICENSE)
-(`GPL-3.0-or-later`). Game files retain their respective rights. Keep the pinned
-rpf9-explorer Core source and binaries out of distributable builds pending
-upstream permission. The pinned revision lacks a repository-level license.
+(`GPL-3.0-or-later`). Game files retain their respective rights.

@@ -1,4 +1,4 @@
-//! Imports names and types from an rpf9-explorer manifest.
+//! Imports names and types from a Leonida `rpf9dump` manifest.
 
 use std::path::Path;
 

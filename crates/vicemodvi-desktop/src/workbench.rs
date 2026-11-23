@@ -17,7 +17,7 @@ use vicemodvi_core::{
     texture_conversion::{self, TextureConversionPlan, TextureShape, IMAGE_EXTENSIONS},
     texture_links::{self, TextureIndex, TextureLink},
     xbox_assets::{self, BuildOptions, TextureExport},
-    Asset, Cancel, Catalog, Error, IndexProgress, RageModel, RageTexturePixels, Result,
+    Asset, Cancel, Catalog, Error, IndexProgress, Model, Pixels, Result,
 };
 
 use crate::{
@@ -55,21 +55,21 @@ struct Busy {
 
 struct LoadedModel {
     asset: usize,
-    model: Arc<RageModel>,
+    model: Arc<Model>,
     links: Vec<TextureLink>,
 }
 
 /// Decoded preview pixels and their egui texture.
 struct Picture {
-    pixels: RageTexturePixels,
+    pixels: Pixels,
     handle: TextureHandle,
     key: String,
 }
 
 struct TexturePreview {
     info: Option<TextureExport>,
-    original: Option<RageTexturePixels>,
-    replacement: Option<RageTexturePixels>,
+    original: Option<Pixels>,
+    replacement: Option<Pixels>,
     conversion: Option<TextureConversionPlan>,
     details: String,
     edit_details: String,
@@ -107,7 +107,7 @@ pub struct Workbench {
 
     selected_asset: Option<usize>,
     model: Option<LoadedModel>,
-    model_job: Option<(usize, Job<Result<(RageModel, Vec<TextureLink>)>>)>,
+    model_job: Option<(usize, Job<Result<(Model, Vec<TextureLink>)>>)>,
     model_error: Option<String>,
     mesh: Option<usize>,
     material: Option<i32>,
@@ -402,7 +402,7 @@ impl Workbench {
         }
     }
 
-    fn model_loaded(&mut self, asset: usize, model: RageModel, links: Vec<TextureLink>) {
+    fn model_loaded(&mut self, asset: usize, model: Model, links: Vec<TextureLink>) {
         let model = Arc::new(model);
         let first = model
             .meshes
@@ -507,7 +507,7 @@ impl Workbench {
         let entry = &catalog.assets[asset];
         let staged = self.project.find(entry).is_some();
         let pool = catalog.source_of(entry).is_ok_and(|s| s.format == "ttpf");
-        let picture = |pixels: RageTexturePixels, label: &str| {
+        let picture = |pixels: Pixels, label: &str| {
             let display = fit_pixels(&pixels, ctx.input(|i| i.max_texture_side));
             let size = [display.width as usize, display.height as usize];
             let mut rgba = display.bgra32.clone();
@@ -789,7 +789,7 @@ impl Workbench {
 }
 
 /// Downscales preview pixels to fit the GPU texture limit.
-fn fit_pixels(pixels: &RageTexturePixels, max_side: usize) -> RageTexturePixels {
+fn fit_pixels(pixels: &Pixels, max_side: usize) -> Pixels {
     let mut current = pixels.clone();
     while current.width as usize > max_side || current.height as usize > max_side {
         let (w, h) = (current.width as usize, current.height as usize);
@@ -801,7 +801,7 @@ fn fit_pixels(pixels: &RageTexturePixels, max_side: usize) -> RageTexturePixels 
                 out[(y * nw + x) * 4..(y * nw + x) * 4 + 4].copy_from_slice(&current.bgra32[at..at + 4]);
             }
         }
-        current = RageTexturePixels { width: nw as i32, height: nh as i32, bgra32: out };
+        current = Pixels { width: nw as i32, height: nh as i32, bgra32: out };
     }
     current
 }

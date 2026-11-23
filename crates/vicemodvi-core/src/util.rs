@@ -18,7 +18,11 @@ pub fn hex_upper(bytes: &[u8]) -> String {
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    hex_upper(&Sha256::digest(bytes))
+    hex_upper(&sha256(bytes))
+}
+
+pub fn sha256(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
 }
 
 /// Absolute path without resolving links, like `Path.GetFullPath`.
