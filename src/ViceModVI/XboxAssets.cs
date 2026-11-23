@@ -29,58 +29,86 @@ public static class XboxAssets
             Action<IndexProgress>? report = progress is null ? null : entry => progress(path, entry);
             bool cache = useCache && inventory is null;
             if (cache && SourceCatalogCache.TryRestore(catalog, path)) continue;
-            int firstAsset = catalog.Assets.Count;
-            string format = Path.GetExtension(path).ToLowerInvariant() switch
+            int firstSource = catalog.Sources.Count, firstAsset = catalog.Assets.Count;
+            try
             {
-                ".rpf" => "rpf9",
-                ".ttpf" => "ttpf",
-                _ => throw new InvalidDataException($"Unsupported source: {path}")
-            };
-            using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            Span<byte> magic = new byte[4];
-            input.ReadExactly(magic);
-            if (!(format == "rpf9" ? magic.SequenceEqual("9FPR"u8) : magic.SequenceEqual("RDS5"u8)))
-                throw new InvalidDataException($"Unexpected {format} signature: {path}");
-            long length = input.Length;
-            report?.Invoke(new("Reading source fingerprint", 0, length, "bytes"));
-            var fingerprint = Fingerprint.Create(path, input,
-                report is null ? null : bytes => report(new("Reading source fingerprint", bytes, length, "bytes")), cancellationToken);
-            var source = new Source(catalog.Sources.Count.ToString(), path, format, fingerprint);
-            catalog.Sources.Add(source);
-            if (format == "ttpf")
-            {
-                report?.Invoke(new("Reading texture table", 0, 0, "entries"));
-                var textures = TtpfReader.Inspect(path, cancellationToken).Textures;
-                int read = 0;
-                foreach (var texture in textures)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    catalog.Assets.Add(new($"{source.Id}:ttpf:{texture.Index}", source.Id, "texture", texture.Name,
-                        "alias", "RDS5/ETPF descriptor", Index: texture.Index, NativeKey: Key(texture.AssetKey)));
-                    if (++read % 128 == 0 || read == textures.Count)
-                        report?.Invoke(new("Indexing textures", read, textures.Count, "entries"));
-                }
-                if (cache) SourceCatalogCache.Store(catalog, source, firstAsset);
-                continue;
+                AddSource(catalog, path, inventory, ref imported, report, cache, cancellationToken);
             }
-            IReadOnlyList<long>? offsets = null;
-            if (inventory is not null)
+            // One unreadable source (a zeroed header, a cut-off file, a reader limit) is reported and
+            // left out; the folder still opens and completed sources stay cached. An explicit
+            // inventory names a single RPF, so its failures are not hidden.
+            catch (Exception error) when (inventory is null && IsSourceError(error))
             {
-                if (imported) throw new InvalidDataException("An inventory must be paired with exactly one RPF.");
-                var rows = ReadInventory(source, inventory).ToArray();
-                catalog.Assets.AddRange(rows);
-                offsets = rows.Where(row => row.Evidence.StartsWith("zlib", StringComparison.Ordinal))
-                    .Select(row => row.Range!.Offset).ToArray();
-                imported = true;
+                catalog.Assets.RemoveRange(firstAsset, catalog.Assets.Count - firstAsset);
+                catalog.Sources.RemoveRange(firstSource, catalog.Sources.Count - firstSource);
+                catalog.Skipped.Add(new(path, error.Message));
+                report?.Invoke(new($"Skipped: {error.Message}", 0, 0, "entries"));
             }
-            var drawables = ResourceModels.Available ? ResourceModels.List(source, report, cancellationToken) : null;
-            ScanRpf(catalog, source, input, offsets ?? drawables?.CandidateOffsets, report, cancellationToken);
-            if (drawables is not null) ResourceModels.AddDrawables(catalog, source, firstAsset, drawables.Rows);
-            if (cache) SourceCatalogCache.Store(catalog, source, firstAsset);
         }
         if (inventory is not null && !imported) throw new InvalidDataException("An inventory requires an RPF source.");
-        if (catalog.Sources.Count == 0) throw new InvalidDataException("No RPF or TTPF sources found.");
+        if (catalog.Sources.Count == 0)
+            throw new InvalidDataException(catalog.Skipped.Count == 0 ? "No RPF or TTPF sources found." :
+                $"No source could be read. {string.Join(" ", catalog.Skipped.Select(s => $"{Path.GetFileName(s.Path)}: {s.Reason}"))}");
         return catalog;
+    }
+
+    /// Errors that mean one source cannot be indexed, as opposed to cancellation or a bug.
+    internal static bool IsSourceError(Exception error) => error is IOException or InvalidDataException or
+        UnauthorizedAccessException or NotSupportedException or FormatException or OverflowException or
+        ArgumentException or IndexOutOfRangeException or InvalidOperationException or JsonException or
+        System.ComponentModel.Win32Exception;
+
+    private static void AddSource(Catalog catalog, string path, string? inventory, ref bool imported,
+        Action<IndexProgress>? report, bool cache, CancellationToken cancellationToken)
+    {
+        int firstAsset = catalog.Assets.Count;
+        string format = Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".rpf" => "rpf9",
+            ".ttpf" => "ttpf",
+            _ => throw new InvalidDataException($"Unsupported source: {path}")
+        };
+        using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        Span<byte> magic = new byte[4];
+        input.ReadExactly(magic);
+        if (!(format == "rpf9" ? magic.SequenceEqual("9FPR"u8) : magic.SequenceEqual("RDS5"u8)))
+            throw new InvalidDataException($"Unexpected {format} signature: {path}");
+        long length = input.Length;
+        report?.Invoke(new("Reading source fingerprint", 0, length, "bytes"));
+        var fingerprint = Fingerprint.Create(path, input,
+            report is null ? null : bytes => report(new("Reading source fingerprint", bytes, length, "bytes")), cancellationToken);
+        var source = new Source(catalog.Sources.Count.ToString(), path, format, fingerprint);
+        catalog.Sources.Add(source);
+        if (format == "ttpf")
+        {
+            report?.Invoke(new("Reading texture table", 0, 0, "entries"));
+            var textures = TtpfReader.Inspect(path, cancellationToken).Textures;
+            int read = 0;
+            foreach (var texture in textures)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                catalog.Assets.Add(new($"{source.Id}:ttpf:{texture.Index}", source.Id, "texture", texture.Name,
+                    "alias", "RDS5/ETPF descriptor", Index: texture.Index, NativeKey: Key(texture.AssetKey)));
+                if (++read % 128 == 0 || read == textures.Count)
+                    report?.Invoke(new("Indexing textures", read, textures.Count, "entries"));
+            }
+            if (cache) SourceCatalogCache.Store(catalog, source, firstAsset);
+            return;
+        }
+        IReadOnlyList<long>? offsets = null;
+        if (inventory is not null)
+        {
+            if (imported) throw new InvalidDataException("An inventory must be paired with exactly one RPF.");
+            var rows = ReadInventory(source, inventory).ToArray();
+            catalog.Assets.AddRange(rows);
+            offsets = rows.Where(row => row.Evidence.StartsWith("zlib", StringComparison.Ordinal))
+                .Select(row => row.Range!.Offset).ToArray();
+            imported = true;
+        }
+        var drawables = ResourceModels.Available ? ResourceModels.List(source, report, cancellationToken) : null;
+        ScanRpf(catalog, source, input, offsets ?? drawables?.CandidateOffsets, report, cancellationToken);
+        if (drawables is not null) ResourceModels.AddDrawables(catalog, source, firstAsset, drawables.Rows);
+        if (cache) SourceCatalogCache.Store(catalog, source, firstAsset);
     }
 
     public static void ConvertCarveIndex(string index, string output)

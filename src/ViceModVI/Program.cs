@@ -38,6 +38,8 @@ static int Run(string[] args)
                     .Where(file => Path.GetExtension(file).ToLowerInvariant() is ".rpf" or ".ttpf")
                     .Order(StringComparer.OrdinalIgnoreCase)
                 : new[] { input }), inventory, useCache: useCache);
+            foreach (var skipped in catalog.Skipped)
+                Console.Error.WriteLine($"Skipped {skipped.Path}: {skipped.Reason}");
             catalog.Save(output);
             Print(catalog.Assets.GroupBy(asset => asset.Type).ToDictionary(group => group.Key, group => group.Count()));
             return 0;

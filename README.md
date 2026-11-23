@@ -56,7 +56,7 @@ The first build restores dependencies from NuGet, including the shared Magick.NE
 
 ### Expanded model coverage
 
-The model helper uses the inventory and drawable reader from a sibling checkout named `gta6-resource-tools`. Use the pinned source revision and the patch bundled with ViceModVI, which adds indexing progress and bounds memory use on large archives. Apply the patch once to a clean checkout. After building .NET, run these commands from the ViceModVI repo root on Windows with Rust and the MSVC build tools:
+The model helper uses the inventory and drawable reader from a sibling checkout named `gta6-resource-tools`. Use the pinned source revision and the patch bundled with ViceModVI, which adds indexing progress, bounds memory use on large archives, reads zlib sequences above 16 MiB (as in `audio.rpf`), and accepts the `9FPR` headers of `levels.rpf` and `core_bvh4.rpf`. Apply the patch once to a clean checkout. After building .NET, run these commands from the ViceModVI repo root on Windows with Rust and the MSVC build tools:
 
 ```powershell
 git clone https://github.com/cayetanobp/gta6-resource-tools.git ../gta6-resource-tools
