@@ -1,4 +1,5 @@
-using System.Diagnostics;
+using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
 using System.Globalization;
 using System.Numerics;
 using RpfPreview.Core;
@@ -7,17 +8,14 @@ namespace ViceModVI;
 
 internal static class ResourceModels
 {
-    private static string Helper => Path.Combine(AppContext.BaseDirectory,
-        OperatingSystem.IsWindows() ? "vicemodvi-models.exe" : "vicemodvi-models");
-
-    public static bool Available => File.Exists(Helper);
+    public static bool Available => File.Exists(Path.Combine(AppContext.BaseDirectory, "vicemodvi_models.dll"));
 
     internal sealed record Inventory(IReadOnlyList<long>? CandidateOffsets, IReadOnlyList<string> Rows);
 
     public static Inventory List(Source source, Action<IndexProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        using var output = ReadOutput(progress, cancellationToken, "list", source.Path);
+        using var output = ReadOutput(source.Path, null, progress, cancellationToken);
         using var reader = new StreamReader(output);
         var offsets = new List<long>();
         var rows = new List<string>();
@@ -64,8 +62,8 @@ internal static class ResourceModels
 
     public static RageModel Read(Source source, Asset asset)
     {
-        if (!Available) throw new NotSupportedException("Place vicemodvi-models next to ViceModVI to read this drawable.");
-        using var output = ReadOutput(null, CancellationToken.None, "mesh", source.Path, asset.DrawableLocator!);
+        if (!Available) throw new NotSupportedException("The integrated model reader is missing from this build.");
+        using var output = ReadOutput(source.Path, asset.DrawableLocator, null, CancellationToken.None);
         using var mesh = new BinaryReader(output);
         ReadOnlySpan<byte> version = mesh.ReadBytes(4);
         bool hasMaterials = version.SequenceEqual("VMM2"u8);
@@ -114,52 +112,58 @@ internal static class ResourceModels
         return new(asset.Name, meshes, min, max) { Materials = materials, PresentationNote = "Static geometry from Resource Tools." };
     }
 
-    private static async Task<string> ReadDiagnostics(StreamReader input, Action<IndexProgress>? progress)
-    {
-        var diagnostics = new System.Text.StringBuilder();
-        while (await input.ReadLineAsync().ConfigureAwait(false) is { } line)
-        {
-            var fields = line.Split('\t');
-            if (fields.Length == 5 && fields[0] == "VMP1" &&
-                long.TryParse(fields[2], out long done) && long.TryParse(fields[3], out long total))
-                progress?.Invoke(new(fields[1], done, total, fields[4]));
-            else diagnostics.AppendLine(line);
-        }
-        return diagnostics.ToString();
-    }
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int Output(IntPtr data, nuint length);
 
-    private static MemoryStream ReadOutput(Action<IndexProgress>? progress, CancellationToken cancellationToken, params string[] args)
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int Progress(IntPtr phase, nuint phaseLength, long done, long total,
+        IntPtr unit, nuint unitLength);
+
+    [DllImport("vicemodvi_models", EntryPoint = "vicemodvi_read_model", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ReadNative(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? locator,
+        Output output, Output error, Progress progress);
+
+    private static MemoryStream ReadOutput(string path, string? locator, Action<IndexProgress>? progress,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var start = new ProcessStartInfo(Helper)
+        byte[]? bytes = null;
+        string? diagnostics = null;
+        ExceptionDispatchInfo? callbackError = null;
+
+        int Invoke(Action callback)
         {
-            UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardOutput = true, RedirectStandardError = true
-        };
-        foreach (string arg in args) start.ArgumentList.Add(arg);
-        using var process = Process.Start(start) ?? throw new IOException("Could not start the drawable reader.");
-        using var cancellation = cancellationToken.Register(() =>
-        {
-            try { if (!process.HasExited) process.Kill(); }
-            catch (InvalidOperationException) { }
-            catch (System.ComponentModel.Win32Exception) { }
-        });
-        var errors = ReadDiagnostics(process.StandardError, progress);
-        var data = new MemoryStream();
-        try
-        {
-            process.StandardOutput.BaseStream.CopyTo(data);
-            process.WaitForExit();
-            string diagnostics = errors.GetAwaiter().GetResult();
-            cancellationToken.ThrowIfCancellationRequested();
-            if (process.ExitCode != 0) throw new InvalidDataException(diagnostics.Trim());
-            data.Position = 0;
-            return data;
+            if (cancellationToken.IsCancellationRequested) return 0;
+            try
+            {
+                callback();
+                return 1;
+            }
+            catch (Exception exception)
+            {
+                callbackError = ExceptionDispatchInfo.Capture(exception);
+                return 0;
+            }
         }
-        catch
-        {
-            data.Dispose();
-            throw;
-        }
+
+        static string Utf8(IntPtr pointer, nuint length) =>
+            Marshal.PtrToStringUTF8(pointer, checked((int)length));
+
+        int result = ReadNative(path, locator,
+            (data, length) => Invoke(() =>
+            {
+                bytes = new byte[checked((int)length)];
+                Marshal.Copy(data, bytes, 0, bytes.Length);
+            }),
+            (data, length) => Invoke(() => diagnostics = Utf8(data, length)),
+            (phase, phaseLength, done, total, unit, unitLength) => Invoke(() =>
+                progress?.Invoke(new(Utf8(phase, phaseLength), done, total, Utf8(unit, unitLength)))));
+        callbackError?.Throw();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (result != 0 || bytes is null)
+            throw new InvalidDataException(diagnostics ?? "The native model reader returned no data.");
+        return new MemoryStream(bytes, writable: false);
     }
 }

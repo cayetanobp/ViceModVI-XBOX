@@ -1,0 +1,11 @@
+[package]
+name = "rpf9-index"
+version = "0.1.0"
+edition = "2021"
+description = "Physical inventory and per-entry extraction for observed 9FPR (RPF9) archives"
+license = "Unlicense"
+publish = false
+
+[dependencies]
+rpf-archive = { path = "../01-rpf-decompressor-deserializer" }
+flate2 = "1.0"

@@ -15,4 +15,19 @@
   <Target Name="CheckExplorerCore" BeforeTargets="PrepareForBuild" Condition="!Exists('$(RpfExplorerCore)')">
     <Error Text="rpf9-explorer Core was not found at $(RpfExplorerCore). See the pinned checkout and build commands in README.md." />
   </Target>
+  <PropertyGroup>
+    <ModelReaderManifest>$(MSBuildThisFileDirectory)../../tools/model-reader/Cargo.toml</ModelReaderManifest>
+    <ModelReaderTargetDir>$(MSBuildThisFileDirectory)../../.local/model-reader</ModelReaderTargetDir>
+    <ModelReaderTarget Condition="'$(ModelReaderTarget)' == ''">x86_64-pc-windows-msvc</ModelReaderTarget>
+    <ModelReaderDll>$(ModelReaderTargetDir)/$(ModelReaderTarget)/release/vicemodvi_models.dll</ModelReaderDll>
+    <CargoExecutable Condition="'$(CargoExecutable)' == ''">cargo</CargoExecutable>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
+    <Content Include="$(ModelReaderDll)" Link="vicemodvi_models.dll"
+      CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="BuildModelReader" BeforeTargets="PrepareForBuild"
+          Condition="'$(OS)' == 'Windows_NT' and '$(DesignTimeBuild)' != 'true'">
+    <Exec Command="&quot;$(CargoExecutable)&quot; build --locked --release --manifest-path &quot;$(ModelReaderManifest)&quot; --target-dir &quot;$(ModelReaderTargetDir)&quot; --target $(ModelReaderTarget)" />
+  </Target>
 </Project>

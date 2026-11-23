@@ -1,7 +1,7 @@
 use rpf9_identify::{identify_with_progress, resource::{classify, Kind}};
 use rpf9_index::{extract, Entry, Evidence, Payload};
 use rpf9_models::{decode_geometry, drawables};
-use std::{env, fs::File, io::{self, BufReader, Write}};
+use std::{fs::File, io::{self, BufReader, Write}};
 
 type Input = BufReader<File>;
 
@@ -40,9 +40,9 @@ fn parse_part(value: &str) -> io::Result<Entry> {
         evidence: if codec == 1 { Evidence::ZlibSequence } else { Evidence::ZlibStream } })
 }
 
-fn list(input: &mut Input, out: &mut impl Write) -> io::Result<()> {
+fn list(input: &mut Input, out: &mut impl Write, progress: Progress) -> io::Result<()> {
     let report = identify_with_progress(input, |phase, done, total, unit| {
-        eprintln!("VMP1\t{phase}\t{done}\t{total}\t{unit}");
+        report_progress(progress, phase, done, total, unit);
     })?;
     writeln!(out, "# VMI1")?;
     for entry in &report.inventory.entries {
@@ -52,7 +52,7 @@ fn list(input: &mut Input, out: &mut impl Write) -> io::Result<()> {
     }
     let total = report.resources.len();
     for (done, resource) in report.resources.iter().enumerate() {
-        if done % 32 == 0 { eprintln!("VMP1\tReading resources\t{done}\t{total}\tentries"); }
+        if done % 32 == 0 { report_progress(progress, "Reading resources", done as u64, total as u64, "entries"); }
         if !matches!(&resource.kind, Kind::NamedDictionary { extension, .. } |
             Kind::Named { extension, .. } if extension == "#dr") { continue; }
         let entry = |i: &usize| report.inventory.entries[*i].clone();
@@ -71,7 +71,7 @@ fn list(input: &mut Input, out: &mut impl Write) -> io::Result<()> {
             writeln!(out, "{}\t{}\t{i}\t{name}\t{i}|{v}|{p}", virt[0].offset, last.stored_end)?;
         }
     }
-    eprintln!("VMP1\tReading resources\t{total}\t{total}\tentries");
+    report_progress(progress, "Reading resources", total as u64, total as u64, "entries");
     Ok(())
 }
 
@@ -115,14 +115,51 @@ fn mesh(input: &mut Input, value: &str, out: &mut impl Write) -> io::Result<()> 
     Ok(())
 }
 
-fn main() -> io::Result<()> {
-    let args: Vec<_> = env::args().skip(1).collect();
-    let mut out = io::BufWriter::new(io::stdout().lock());
-    match args.as_slice() {
-        [mode, path] if mode == "list" => list(&mut BufReader::new(File::open(path)?), &mut out)?,
-        [mode, path, locator] if mode == "mesh" =>
-            mesh(&mut BufReader::new(File::open(path)?), locator, &mut out)?,
-        _ => return Err(invalid("Expected list ARCHIVE or mesh ARCHIVE LOCATOR")),
+
+struct Cancelled;
+
+type Output = extern "C" fn(*const u8, usize) -> i32;
+type Progress = extern "C" fn(*const u8, usize, u64, u64, *const u8, usize) -> i32;
+
+fn report_progress(callback: Progress, phase: &str, done: u64, total: u64, unit: &str) {
+    if callback(phase.as_ptr(), phase.len(), done, total, unit.as_ptr(), unit.len()) == 0 {
+        std::panic::resume_unwind(Box::new(Cancelled));
     }
-    out.flush()
+}
+
+/// # Safety
+/// path must point to a valid UTF-8 C string. locator must be null for an
+/// inventory, or point to a valid UTF-8 C string for a mesh. Callbacks may
+/// read borrowed buffers only for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn vicemodvi_read_model(
+    path: *const std::ffi::c_char,
+    locator: *const std::ffi::c_char,
+    output: Output,
+    error: Output,
+    progress: Progress,
+) -> i32 {
+    let result = std::panic::catch_unwind(|| -> io::Result<()> {
+        let path = std::ffi::CStr::from_ptr(path).to_str().map_err(|e| invalid(e.to_string()))?;
+        let mut input = BufReader::new(File::open(path)?);
+        let mut bytes = Vec::new();
+        if locator.is_null() {
+            list(&mut input, &mut bytes, progress)?;
+        } else {
+            let locator = std::ffi::CStr::from_ptr(locator).to_str().map_err(|e| invalid(e.to_string()))?;
+            mesh(&mut input, locator, &mut bytes)?;
+        }
+        if output(bytes.as_ptr(), bytes.len()) == 0 {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "Model output was rejected"));
+        }
+        Ok(())
+    });
+    let message = match result {
+        Ok(Ok(())) => return 0,
+        Ok(Err(error)) => error.to_string(),
+        Err(panic) if panic.is::<Cancelled>() => return 2,
+        Err(_) => "The native model reader failed unexpectedly.".to_string(),
+    };
+    error(message.as_ptr(), message.len());
+    1
 }

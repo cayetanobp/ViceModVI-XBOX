@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[lib]
+name = "vicemodvi_models"
+crate-type = ["cdylib"]
+
 [dependencies]
-rpf9-models = { path = "../../../gta6-resource-tools/04-resource-readers/models" }
-rpf9-identify = { path = "../../../gta6-resource-tools/03-format-identifier" }
-rpf9-index = { path = "../../../gta6-resource-tools/02-rpf-index-extractor" }
+rpf9-models = { path = "vendor/04-resource-readers/models" }
+rpf9-identify = { path = "vendor/03-format-identifier" }
+rpf9-index = { path = "vendor/02-rpf-index-extractor" }
