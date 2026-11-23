@@ -124,6 +124,22 @@ public partial class Workbench : Window
         }
     }
 
+    private void OpenRepository(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
+    {
+        e.Handled = true;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(e.Uri.AbsoluteUri)
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            StatusLine.Text = "Could not open the repository link.";
+        }
+    }
+
     private void LoadAsset(Asset? asset)
     {
         if (catalog is null) return;

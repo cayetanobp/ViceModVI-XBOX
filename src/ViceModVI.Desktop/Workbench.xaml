@@ -15,12 +15,23 @@
             </DockPanel>
         </Border>
         <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="20,10">
-            <DockPanel>
-                <ProgressBar x:Name="WorkProgress" DockPanel.Dock="Right" Width="160" Height="12"
-                             Margin="16,0,0,0" Visibility="Collapsed"/>
-                <TextBlock x:Name="StatusLine" Text="Open a folder or an Xbox Series RPF or TTPF file." TextWrapping="Wrap"
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="StatusLine" Text="Open a folder or an Xbox Series RPF or TTPF file."
+                           Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                            AutomationProperties.LiveSetting="Polite"/>
-            </DockPanel>
+                <TextBlock Grid.Column="1" VerticalAlignment="Center" Foreground="#415B62">
+                    <Run Text="© "/><Hyperlink NavigateUri="https://github.com/cayetanobp/ViceModVI-XBOX"
+                                               RequestNavigate="OpenRepository">ViceModVI-XBOX</Hyperlink>
+                </TextBlock>
+                <ProgressBar Grid.Column="2" x:Name="WorkProgress" HorizontalAlignment="Right" Width="160" Height="12"
+                             Margin="12,0,0,0" Visibility="Collapsed"/>
+            </Grid>
         </Border>
         <Grid Margin="14">
             <Grid.ColumnDefinitions>
