@@ -44,6 +44,8 @@ PS5 and PC game assets still need their own format profiles and platform tests.
 
 ## How it works
 
+![ViceModVI workbench showing a 3D model and the asset inspector](assets/vicemodvi-workbench.png)
+
 | Step | What ViceModVI does |
 | --- | --- |
 | **Open** | Use **Open file** for one `.rpf` or `.ttpf`, or **Open folder** to catalog both types together. The viewer loads vicemodvi-catalog.json from the root when present. The JSON must reference the local asset paths. The viewer reuses cached source indexes when the file size, timestamp, and sampled bytes still match. |
