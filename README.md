@@ -276,6 +276,4 @@ SHA-256. The copy preserves the archive size and directory bytes.
 ## License
 
 ViceModVI's own code is released under the [GNU GPL v3 or later](LICENSE)
-(`GPL-3.0-or-later`). Game files retain their respective rights. Keep the pinned
-rpf9-explorer Core source and binaries out of distributable builds pending
-upstream permission. The pinned revision lacks a repository-level license.
+(`GPL-3.0-or-later`). Game files retain their respective rights.
