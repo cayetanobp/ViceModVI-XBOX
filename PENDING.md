@@ -86,6 +86,14 @@ Selecting an entry opens its preview. A model shows its meshes and materials, wi
 
 **Evidence.** The desktop integration check opened the local Xbox Series 1.0.2.1 sample folder, navigated to `core_restofworld.rpf`, and previewed model `0:model:203F010` using shader 1. **View linked texture** selected the resolved entry in `data/ttdb/props/ttdb_props.ttpf`. Native-key search returned the same entry. The check exercised the two-asset context selection and reopened exported OBJ and DDS files. It staged and reverted an image on a pool entry with a partial native mip chain, then verified the conversion plan on a writable entry and opened its pool as a standalone file. Opening requested no output filename. [Desktop walkthrough](README.md#local-replacement-workflow)
 
+### Desktop texture round trip
+
+With the Windows .NET 10 Release build and the Xbox Series 1.0.2.1 sample, export RPF9 texture `0:dictionary:680010:texture:0` and TTPF texture `3:ttpf:4` as DDS. For the 4 × 4 BC1 texture, XOR the byte at file offset 152 with `1`. For the 1,024 × 1,024 BC7 texture, reverse the order of the 256 blocks in each block row of the first mip, using 16 bytes per block from file offset 148. This preserves the eight lower mips. Import each DDS with **Edit texture** and confirm the preview changes. **Revert replacement** should restore the original. [Desktop import steps](README.md#local-replacement-workflow)
+
+Use the CLI to [write an RPF9 copy](README.md#experimental-rpf9-copy) and [write a TTPF copy](README.md#experimental-ttpf-copy). Reopen both copies in the viewer, rebuild each catalog, and export the same texture to compare its SHA-256 with the edited DDS.
+
+The RPF9 edit changed one visible pixel and rewrote one segment. The TTPF edit changed 515,510 pixels in the first mip and rewrote one chunk. The viewer rendered both edits from the reopened copies, the re-exported DDS hashes matched, and both writers verified a neighboring entry. The original RPF and TTPF SHA-256 hashes matched before and after the test. In-game verification remains pending.
+
 ## MF-08 · Installation root and incremental global index
 
 Prompt once for the game root when the user sets up an installation. Read its manifest or configuration to identify the platform, package identity, and build. Persist the root and keep its index separate from the temporary catalog used for the folder currently open. The folder sets the view. The installation index supplies cross-folder texture and other dependency lookups.
