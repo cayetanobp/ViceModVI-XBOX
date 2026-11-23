@@ -100,12 +100,16 @@ public sealed record ReadMeasurement(string AssetId, long VerificationBytes, lon
     public long TotalBytes => checked(VerificationBytes + PayloadBytes);
 }
 
+/// A source that could not be indexed, and why. The rest of the catalog was built without it.
+public sealed record SkippedSource(string Path, string Reason);
+
 public sealed class Catalog
 {
     public const int CurrentVersion = 1;
     public int Version { get; init; } = CurrentVersion;
     public List<Source> Sources { get; init; } = [];
     public List<Asset> Assets { get; init; } = [];
+    public List<SkippedSource> Skipped { get; init; } = [];
 
     public Source SourceOf(Asset asset) => Sources.Single(source => source.Id == asset.SourceId);
 

@@ -67,6 +67,14 @@ public partial class Workbench : Window
         int models = loaded.Assets.Count(asset => asset.Type == "model");
         StatusLine.Text = $"{models:N0} models · " +
             $"{loaded.Assets.Count - ranges:N0} identified entries and {ranges:N0} unknown ranges.";
+        StatusLine.ToolTip = null;
+        if (loaded.Skipped.Count > 0)
+        {
+            var names = loaded.Skipped.Select(skipped => Path.GetFileName(skipped.Path)).ToArray();
+            StatusLine.Text += $" Skipped {names.Length:N0} unreadable source{(names.Length == 1 ? "" : "s")}: " +
+                string.Join(", ", names.Take(3)) + (names.Length > 3 ? ", …" : "") + ".";
+            StatusLine.ToolTip = string.Join("\n", loaded.Skipped.Select(skipped => $"{skipped.Path}\n    {skipped.Reason}"));
+        }
     }
 
     private async void OpenFolder(object sender, RoutedEventArgs e)

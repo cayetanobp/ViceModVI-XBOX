@@ -115,7 +115,15 @@ fn mesh(input: &mut Input, value: &str, out: &mut impl Write) -> io::Result<()> 
     Ok(())
 }
 
-fn main() -> io::Result<()> {
+fn main() {
+    // Plain message on stderr: ViceModVI shows it as the reason a source was skipped.
+    if let Err(error) = run() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> io::Result<()> {
     let args: Vec<_> = env::args().skip(1).collect();
     let mut out = io::BufWriter::new(io::stdout().lock());
     match args.as_slice() {
