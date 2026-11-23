@@ -71,6 +71,18 @@ struct Picture {
     pixels: Pixels,
     handle: TextureHandle,
     key: String,
+    rgb_thumbnail: std::cell::OnceCell<TextureHandle>,
+}
+
+impl Picture {
+    fn rgb_thumbnail(&self, ctx: &egui::Context) -> &TextureHandle {
+        self.rgb_thumbnail.get_or_init(|| {
+            let thumbnail = fit_pixels(&self.pixels, 256);
+            let colors = thumbnail.bgra32.chunks_exact(4).map(|p| Color32::from_rgb(p[2], p[1], p[0])).collect();
+            let image = egui::ColorImage::new([thumbnail.width as usize, thumbnail.height as usize], colors);
+            ctx.load_texture(format!("{}|rgb", self.key), image, TextureOptions::LINEAR)
+        })
+    }
 }
 
 struct TexturePreview {
@@ -91,11 +103,33 @@ struct Preview {
     details: String,
     edit_details: String,
     staged: bool,
+    show_replacement: bool,
 }
 
 impl Preview {
-    fn picture(&self, replacement: bool) -> Option<&Picture> {
-        if replacement { self.replacement.as_ref() } else { self.original.as_ref() }
+    fn picture(&self) -> Option<&Picture> {
+        if self.show_replacement { self.replacement.as_ref() } else { self.original.as_ref() }
+    }
+}
+
+enum TextureView {
+    Loading { job: Job<TexturePreview>, reveal_replacement: bool },
+    Ready(Box<Preview>),
+    Failed,
+}
+
+impl TextureView {
+    fn preview(&self) -> Option<&Preview> {
+        match self {
+            Self::Ready(preview) => Some(preview),
+            _ => None,
+        }
+    }
+
+    fn cancel(&self) {
+        if let Self::Loading { job, .. } = self {
+            job.cancel.cancel();
+        }
     }
 }
 
@@ -127,11 +161,10 @@ pub struct Workbench {
     map_choices: HashMap<i32, MapChoice>,
     debug_map: bool,
 
+    /// The inspected asset and confirmed mesh diffuse can share one preview.
     texture: Option<usize>,
-    preview: Option<Preview>,
-    texture_job: Option<(usize, Job<TexturePreview>)>,
-    show_replacement: bool,
-    reveal_replacement: bool,
+    diffuse_texture: Option<usize>,
+    texture_views: HashMap<usize, TextureView>,
 
     busy: Option<Busy>,
     status: String,
@@ -210,10 +243,8 @@ impl Workbench {
             map_choices: HashMap::new(),
             debug_map: false,
             texture: None,
-            preview: None,
-            texture_job: None,
-            show_replacement: false,
-            reveal_replacement: false,
+            diffuse_texture: None,
+            texture_views: HashMap::new(),
             busy: None,
             status: "Open a folder or an Xbox Series RPF or TTPF file.".into(),
             close_after_opening: false,
@@ -392,25 +423,26 @@ impl Workbench {
         }
         self.selected_asset = asset;
         self.model = None;
-        self.model_job = None;
+        if let Some((_, job)) = self.model_job.take() {
+            job.cancel.cancel();
+        }
         self.model_error = None;
         self.mesh = None;
         self.material = None;
         self.map_choice = None;
         self.debug_map = false;
-        self.load_texture(None);
+        let inspected = asset.filter(|&asset| self.catalog.as_ref().is_some_and(|catalog| catalog.assets[asset].kind == "texture"));
+        self.set_preview_textures(inspected, None);
         let (Some(asset), Some(catalog), Some(index)) = (asset, self.catalog.clone(), self.index.clone()) else { return };
-        match catalog.assets[asset].kind.as_str() {
-            "model" => {
-                self.model_job = Some((asset, Job::spawn(&self.ctx, move |_| {
-                    let entry = &catalog.assets[asset];
-                    let model = xbox_assets::read_model(&catalog, entry)?;
-                    let maps = texture_links::resolve_material_maps(&catalog, &index, entry, &model)?;
-                    Ok((model, maps))
-                })));
-            }
-            "texture" => self.load_texture(Some(asset)),
-            _ => {}
+        if catalog.assets[asset].kind == "model" {
+            self.model_job = Some((asset, Job::spawn(&self.ctx, move |cancel| {
+                cancel.check()?;
+                let entry = &catalog.assets[asset];
+                let model = xbox_assets::read_model(&catalog, entry)?;
+                cancel.check()?;
+                let maps = texture_links::resolve_material_maps(&catalog, &index, entry, &model)?;
+                Ok((model, maps))
+            })));
         }
     }
 
@@ -487,8 +519,13 @@ impl Workbench {
     }
 
     fn refresh_map(&mut self) {
-        let choice = self.material.and_then(|shader| self.map_choices.get(&shader).copied()).or_else(|| self.default_map());
-        self.apply_map(choice);
+        self.map_choice = self.material.and_then(|shader| self.map_choices.get(&shader).copied()).or_else(|| self.default_map());
+        self.debug_map = false;
+        let inspected = self.selected_map().and_then(|(_, candidate)| candidate)
+            .and_then(|candidate| self.catalog.as_ref()?.position(&candidate.asset_id));
+        let diffuse = self.preferred_color_map().and_then(|(_, map)| map.verified_color_id())
+            .and_then(|id| self.catalog.as_ref()?.position(id));
+        self.set_preview_textures(inspected, diffuse);
     }
 
     fn select_map(&mut self, choice: Option<MapChoice>) {
@@ -502,42 +539,58 @@ impl Workbench {
         self.refresh_map();
     }
 
-    fn apply_map(&mut self, choice: Option<MapChoice>) {
-        self.map_choice = choice;
-        self.debug_map = false;
-        let asset = self.selected_map().and_then(|(_, candidate)| candidate)
-            .and_then(|candidate| self.catalog.as_ref()?.position(&candidate.asset_id));
-        self.load_texture(asset);
+    fn inspected_preview(&self) -> Option<&Preview> {
+        self.texture_views.get(&self.texture?)?.preview()
     }
 
-    fn uses_vertex_colors(&self, verified_color: bool) -> bool {
-        let Some((loaded, index)) = self.model.as_ref().zip(self.mesh) else { return false };
+    fn mesh_surface(&self) -> (Surface, Option<usize>) {
+        let Some((loaded, index)) = self.model.as_ref().zip(self.mesh) else { return (Surface::Plain, None) };
         let mesh = &loaded.model.meshes[index];
-        verified_color
-            && self.selected_map().and_then(|(map, _)| map.link.name_hash.as_deref()) == Some(WHITE_DIFFUSE)
-            && !self.show_replacement
-            && !self.preview.as_ref().is_some_and(|p| p.confirmed)
-            && mesh.vertex_colors.as_ref().is_some_and(|c| c.len() == mesh.positions.len())
+        let has_uv = mesh.tex_coords.as_ref().is_some_and(|uv| !uv.is_empty() && uv.len() == mesh.positions.len());
+        if has_uv && self.debug_map && !self.shows_verified_color() && self.inspected_preview().and_then(Preview::picture).is_some() {
+            return (Surface::DebugTexture, self.texture);
+        }
+        let diffuse = self.diffuse_texture.and_then(|asset| self.texture_views.get(&asset)).and_then(TextureView::preview);
+        let white = self.diffuse_texture.is_some()
+            && self.preferred_color_map().and_then(|(_, map)| map.link.name_hash.as_deref()) == Some(WHITE_DIFFUSE);
+        if white && !diffuse.is_some_and(|p| p.show_replacement || p.confirmed)
+            && mesh.vertex_colors.as_ref().is_some_and(|colors| colors.len() == mesh.positions.len())
+        {
+            return (Surface::VertexColors, None);
+        }
+        if has_uv && diffuse.and_then(Preview::picture).is_some() {
+            return (Surface::Texture, self.diffuse_texture);
+        }
+        (Surface::Plain, None)
     }
 
-    fn load_texture(&mut self, asset: Option<usize>) {
-        if let Some((_, job)) = self.texture_job.take() {
-            job.cancel.cancel();
+    fn set_preview_textures(&mut self, inspected: Option<usize>, diffuse: Option<usize>) {
+        self.texture = inspected;
+        self.diffuse_texture = diffuse;
+        self.texture_views.retain(|&asset, view| {
+            let active = Some(asset) == inspected || Some(asset) == diffuse;
+            if !active {
+                view.cancel();
+            }
+            active
+        });
+        for asset in [diffuse, inspected].into_iter().flatten() {
+            if !self.texture_views.contains_key(&asset) {
+                self.reload_texture(asset, false);
+            }
         }
-        self.texture = asset;
-        self.preview = None;
-        self.show_replacement = false;
-        self.reveal_replacement = false;
-        let (Some(asset), Some(catalog)) = (asset, self.catalog.clone()) else { return };
+    }
+
+    fn reload_texture(&mut self, asset: usize, reveal_replacement: bool) {
+        let Some(catalog) = self.catalog.clone() else { return };
         let stage = self.project.find(&catalog.assets[asset]).cloned();
         let job = Job::spawn(&self.ctx, move |cancel| read_preview(&catalog, asset, stage.as_ref(), cancel));
-        self.texture_job = Some((asset, job));
+        if let Some(old) = self.texture_views.insert(asset, TextureView::Loading { job, reveal_replacement }) {
+            old.cancel();
+        }
     }
 
-    fn texture_loaded(&mut self, ctx: &egui::Context, asset: usize, result: TexturePreview) {
-        let Some(catalog) = &self.catalog else { return };
-        let entry = &catalog.assets[asset];
-        let staged = self.project.find(entry).is_some();
+    fn build_preview(ctx: &egui::Context, asset: usize, entry: &Asset, result: TexturePreview, staged: bool, reveal_replacement: bool) -> Preview {
         let picture = |pixels: Pixels, label: &str| {
             let display = fit_pixels(&pixels, ctx.input(|i| i.max_texture_side));
             let size = [display.width as usize, display.height as usize];
@@ -548,13 +601,12 @@ impl Workbench {
             let name = format!("{}|{label}", entry.id);
             let handle = ctx.load_texture(name.clone(), egui::ColorImage::from_rgba_unmultiplied(size, &rgba), TextureOptions::LINEAR);
             let key = format!("{name}|{:?}", handle.id());
-            Picture { handle, pixels, key }
+            Picture { handle, pixels, key, rgb_thumbnail: Default::default() }
         };
         let original = result.original.map(|p| picture(p, "original"));
         let replacement = result.replacement.map(|p| picture(p, "replacement"));
-        let reveal = self.reveal_replacement && replacement.is_some();
-        self.reveal_replacement = false;
-        self.preview = Some(Preview {
+        let show_replacement = reveal_replacement && replacement.is_some();
+        Preview {
             asset,
             info: result.info,
             original,
@@ -563,9 +615,7 @@ impl Workbench {
             details: result.details,
             edit_details: result.edit_details,
             staged,
-        });
-        if reveal {
-            self.show_replacement = true;
+            show_replacement,
         }
     }
 
@@ -585,7 +635,7 @@ impl Workbench {
     fn revert_replacement(&mut self) {
         let (Some(texture), Some(catalog)) = (self.texture, self.catalog.clone()) else { return };
         if self.project.revert(&catalog.assets[texture]) {
-            self.load_texture(Some(texture));
+            self.reload_texture(texture, false);
             self.status = "Pending replacement discarded.".into();
         }
     }
@@ -740,19 +790,19 @@ impl Workbench {
                 }
             }
         }
-        if let Some((asset, job)) = &self.texture_job {
-            let asset = *asset;
+        let Some(catalog) = &self.catalog else { return };
+        for (&asset, view) in &mut self.texture_views {
+            let TextureView::Loading { job, reveal_replacement } = view else { continue };
             match job.poll() {
                 Poll::Pending => {}
                 Poll::Failed => {
-                    self.texture_job = None;
+                    *view = TextureView::Failed;
                     self.status = "The texture reader failed unexpectedly.".into();
                 }
                 Poll::Done(result) => {
-                    self.texture_job = None;
-                    if self.texture == Some(asset) {
-                        self.texture_loaded(ctx, asset, result);
-                    }
+                    let entry = &catalog.assets[asset];
+                    let staged = self.project.find(entry).is_some();
+                    *view = TextureView::Ready(Box::new(Self::build_preview(ctx, asset, entry, result, staged, *reveal_replacement)));
                 }
             }
         }
@@ -766,8 +816,8 @@ impl Workbench {
                 if let Some(catalog) = &self.catalog {
                     self.project.revert(&catalog.assets[asset]);
                 }
-                if self.texture == Some(asset) {
-                    self.load_texture(Some(asset));
+                if self.texture_views.contains_key(&asset) {
+                    self.reload_texture(asset, false);
                 }
                 self.status = "Texture replacement saved.".into();
             }
@@ -781,9 +831,8 @@ impl Workbench {
                 let Some(catalog) = self.catalog.clone() else { return };
                 match self.project.stage(&catalog, &catalog.assets[asset], &path.to_string_lossy(), dds) {
                     Ok(()) => {
-                        if self.texture == Some(asset) {
-                            self.load_texture(Some(asset));
-                            self.reveal_replacement = true;
+                        if self.texture_views.contains_key(&asset) {
+                            self.reload_texture(asset, true);
                         }
                         self.status = "Replacement staged for this session.".into();
                     }
@@ -810,8 +859,11 @@ impl Workbench {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
-        if let Some((_, job)) = &self.texture_job {
+        if let Some((_, job)) = &self.model_job {
             job.cancel.cancel();
+        }
+        for view in self.texture_views.values() {
+            view.cancel();
         }
         self.closing = true;
     }
@@ -923,7 +975,9 @@ impl eframe::App for Workbench {
                 self.preview_panel(ui, frame);
             });
         });
-        if self.busy.is_some() || self.model_job.is_some() || self.texture_job.is_some() {
+        if self.busy.is_some() || self.model_job.is_some()
+            || self.texture_views.values().any(|view| matches!(view, TextureView::Loading { .. }))
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
@@ -1121,19 +1175,19 @@ impl Workbench {
                 }
             });
             ui.add_space(10.0);
-            let has_replacement = self.preview.as_ref().is_some_and(|p| p.replacement.is_some());
+            let has_replacement = self.inspected_preview().is_some_and(|p| p.replacement.is_some());
             let compare_height = if has_replacement { 34.0 } else { 0.0 };
             let area = Rect::from_min_max(ui.cursor().min, ui.max_rect().max - egui::vec2(0.0, compare_height));
             ui.painter().rect_filled(area, 0.0, theme::PREVIEW_BACKDROP);
             self.draw_preview(ui, frame, area);
-            if has_replacement {
+            if let Some(TextureView::Ready(preview)) = self.texture.and_then(|asset| self.texture_views.get_mut(&asset)).filter(|_| has_replacement) {
                 let controls = Rect::from_min_max(egui::pos2(area.left(), area.bottom() + 12.0), ui.max_rect().max);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(controls), |ui| {
                     ui.horizontal(|ui| {
-                        let baseline = if self.preview.as_ref().is_some_and(|p| p.confirmed) { "Saved" } else { "Original" };
-                        ui.radio_value(&mut self.show_replacement, false, baseline);
+                        let baseline = if preview.confirmed { "Saved" } else { "Original" };
+                        ui.radio_value(&mut preview.show_replacement, false, baseline);
                         ui.add_space(12.0);
-                        ui.radio_value(&mut self.show_replacement, true, "Replacement");
+                        ui.radio_value(&mut preview.show_replacement, true, "Replacement");
                     });
                 });
             }
@@ -1141,38 +1195,25 @@ impl Workbench {
     }
 
     fn draw_preview(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame, area: Rect) {
-        let verified_color = self.shows_verified_color();
+        let (surface, texture) = self.mesh_surface();
         let debug_label = match self.selected_map() {
-            Some((map, Some(candidate))) if self.debug_map && !verified_color => Some(format!(
+            Some((map, Some(candidate))) if surface == Surface::DebugTexture => Some(format!(
                 "Debug preview · {}\n{} · {}", map.link.parameter_hash, file_name(&candidate.source), candidate.asset_id
             )),
             _ => None,
         };
-        let colors = self.uses_vertex_colors(verified_color);
-        let picture = self.preview.as_ref().and_then(|p| p.picture(self.show_replacement));
         let mesh = self.model.as_ref().zip(self.mesh);
         if let (Some((loaded, index)), Some(state), Some(viewer)) = (mesh, frame.wgpu_render_state(), self.viewer.as_mut()) {
             let mesh = &loaded.model.meshes[index];
-            let has_uv = mesh.tex_coords.as_ref().is_some_and(|uv| uv.len() == mesh.positions.len());
             let key = format!("{}#{index}", loaded.asset);
-            viewer.set_mesh(state, &key, mesh, colors);
-            let image = picture.filter(|_| has_uv && !colors && (verified_color || debug_label.is_some())).map(|p| {
-                let fitted = fit_pixels(&p.pixels, viewer.max_texture_side as usize);
-                (p.key.clone(), fitted)
-            });
+            viewer.set_mesh(state, &key, mesh, surface == Surface::VertexColors);
+            let image = texture.and_then(|asset| self.texture_views.get(&asset))
+                .and_then(TextureView::preview).and_then(Preview::picture)
+                .map(|p| (p.key.as_str(), fit_pixels(&p.pixels, viewer.max_texture_side as usize)));
             viewer.set_surface(
                 state,
                 image.as_ref().map(|(key, pixels)| SurfaceImage { key, width: pixels.width as u32, height: pixels.height as u32, bgra: &pixels.bgra32 }),
             );
-            let surface = if colors {
-                Surface::VertexColors
-            } else if image.is_some() && debug_label.is_some() {
-                Surface::DebugTexture
-            } else if image.is_some() {
-                Surface::Texture
-            } else {
-                Surface::Plain
-            };
             viewer.show(ui, state, area, &mut self.camera, surface);
             if let (Surface::DebugTexture, Some(label)) = (surface, debug_label) {
                 let painter = ui.painter().with_clip_rect(area);
@@ -1183,7 +1224,7 @@ impl Workbench {
             }
             return;
         }
-        if let (Some(picture), None) = (picture, mesh) {
+        if let (Some(picture), None) = (self.inspected_preview().and_then(Preview::picture), mesh) {
             let inner = area.shrink(12.0);
             let size = picture.handle.size_vec2();
             let scale = (inner.width() / size.x).min(inner.height() / size.y).max(0.0);
@@ -1256,7 +1297,7 @@ impl Workbench {
                 ui.label(small(message));
             }
             let verified_color = self.shows_verified_color();
-            if self.uses_vertex_colors(verified_color) {
+            if self.mesh_surface().0 == Surface::VertexColors {
                 ui.label(small("Preview uses vertex colors with the white diffuse."));
             }
             if maps.clone().next().is_some() {
@@ -1299,9 +1340,9 @@ impl Workbench {
                 let role = match map.role {
                     MapRole::Diffuse => format!("Diffuse ({})", map.link.slot),
                     MapRole::InferredDiffuse => format!("Unverified ({})", map.link.slot),
-                    MapRole::Normal => format!("Normal map ({})", map.link.slot),
-                    MapRole::PackedSpecular => format!("Packed specular and gloss ({})", map.link.slot),
-                    MapRole::PackedMaterial => format!("Packed material mask ({})", map.link.slot),
+                    MapRole::InferredNormal => format!("Inferred normal map ({})", map.link.slot),
+                    MapRole::InferredPackedSpecular => format!("Inferred specular/gloss map ({})", map.link.slot),
+                    MapRole::InferredPackedMaterial => format!("Inferred packed material map ({})", map.link.slot),
                     MapRole::Unknown => "Unknown".into(),
                 };
                 let status = match map.link.status.as_str() {
@@ -1315,11 +1356,12 @@ impl Workbench {
                     ui.label(small(&format!("Parameter {}\n{} · {}", map.link.parameter_hash, file_name(&candidate.source), candidate.asset_id)))
                         .on_hover_text(&candidate.source);
                     if !verified_color {
-                        let picture = self.preview.as_ref().and_then(|p| p.picture(self.show_replacement));
+                        let picture = self.inspected_preview().and_then(Preview::picture);
                         if let Some(picture) = picture {
-                            let size = picture.handle.size_vec2();
+                            let thumbnail = picture.rgb_thumbnail(ui.ctx());
+                            let size = thumbnail.size_vec2();
                             let scale = (full / size.x).min(140.0 / size.y).min(1.0);
-                            ui.image((picture.handle.id(), size * scale));
+                            ui.image((thumbnail.id(), size * scale)).on_hover_text("RGB channels");
                         }
                         ui.add_enabled(uv && picture.is_some(), egui::Checkbox::new(&mut self.debug_map, "Debug preview on mesh"));
                     }
@@ -1341,7 +1383,7 @@ impl Workbench {
             }
         }
         let wide = |text: &str| egui::Button::new(text).min_size(egui::vec2(full, 0.0));
-        if let Some(preview) = &self.preview {
+        if let Some(preview) = self.inspected_preview() {
             if self.model.is_some() {
                 ui.label(small(if preview.info.is_some() { "Map decoding succeeded." } else { "Map decoding failed." }));
             }
@@ -1365,8 +1407,8 @@ impl Workbench {
                 }
             }
             ui.label(small(&preview.details));
-        } else if self.texture.is_some() {
-            ui.label(small("Reading texture…"));
+        } else if let Some(view) = self.texture.and_then(|asset| self.texture_views.get(&asset)) {
+            ui.label(small(if matches!(view, TextureView::Failed) { "Map decoding failed." } else { "Reading texture…" }));
         }
         if let Some(action) = action {
             action(self);
@@ -1401,3 +1443,6 @@ fn draw_node(ui: &mut egui::Ui, node: &Node, selected: Option<usize>, force_open
             }
         });
 }
+
+#[cfg(test)]
+mod tests;

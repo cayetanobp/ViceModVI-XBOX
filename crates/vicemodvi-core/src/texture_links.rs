@@ -47,9 +47,11 @@ pub enum MapRole {
     Diffuse,
     /// The parameter name is inferred and the color binding is unverified.
     InferredDiffuse,
-    Normal,
-    PackedSpecular,
-    PackedMaterial,
+    // These parameter conventions were measured on map and character materials.
+    // They do not establish how an individual shader samples the texture.
+    InferredNormal,
+    InferredPackedSpecular,
+    InferredPackedMaterial,
     Unknown,
 }
 
@@ -125,9 +127,9 @@ pub fn resolve_material_maps(catalog: &Catalog, index: &TextureIndex, asset: &As
             // Leonida's measured character and map bindings agree on these
             // parameter names and broad roles (dde82f27e, docs/textures.md).
             let (role, name) = match reference.parameter_hash {
-                0x1E77_BF4C => (MapRole::Normal, "bumptex"),
-                0xC6F4_6E79 => (MapRole::PackedSpecular, "speculartex"),
-                0x739E_3D0D => (MapRole::PackedMaterial, "speculartex2"),
+                0x1E77_BF4C => (MapRole::InferredNormal, "bumptex"),
+                0xC6F4_6E79 => (MapRole::InferredPackedSpecular, "speculartex"),
+                0x739E_3D0D => (MapRole::InferredPackedMaterial, "speculartex2"),
                 _ => (MapRole::Unknown, ""),
             };
             let link = resolve_reference(catalog, index, asset, material.shader_index, reference, name)?;
@@ -273,9 +275,9 @@ mod tests {
         assert_eq!(
             maps.iter().map(|m| (m.role, m.link.status.as_str(), m.link.texture_id.as_deref())).collect::<Vec<_>>(),
             [
-                (MapRole::Normal, "confirmed", entry),
-                (MapRole::PackedSpecular, "confirmed", entry),
-                (MapRole::PackedMaterial, "confirmed", entry),
+                (MapRole::InferredNormal, "confirmed", entry),
+                (MapRole::InferredPackedSpecular, "confirmed", entry),
+                (MapRole::InferredPackedMaterial, "confirmed", entry),
                 (MapRole::Unknown, "confirmed", entry),
                 (MapRole::Unknown, "unresolved", None),
                 (MapRole::Diffuse, "confirmed", entry),
