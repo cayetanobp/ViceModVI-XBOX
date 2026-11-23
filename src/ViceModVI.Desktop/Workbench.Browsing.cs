@@ -185,7 +185,7 @@ public partial class Workbench
         if (dialog.ShowDialog(this) != true) return;
         await Run("Exporting staged DDS…", async () =>
         {
-            await Task.Run(() => LocalFiles.Write(dialog.FileName, stream => stream.Write(staged.Dds)));
+            await Task.Run(() => WriteExport(catalog!, asset, dialog.FileName, staged: staged));
             StatusLine.Text = $"Exported {Path.GetFileName(dialog.FileName)}.";
         });
     }
@@ -222,7 +222,7 @@ public partial class Workbench
             string path = Path.Combine(directory, ExportName(asset) + ExportExtension(asset));
             try
             {
-                ExportNative(catalog, asset, path);
+                WriteExport(catalog, asset, path);
                 exported++;
             }
             catch (Exception error) when (IsAssetError(error))
@@ -233,7 +233,14 @@ public partial class Workbench
         return (exported, failures);
     }
 
-    private async Task ExportOne(Asset asset)
+    private async void ExportPreviewTexture(object sender, RoutedEventArgs e)
+    {
+        if (texture is not { } asset) return;
+        var staged = ShowReplacement.IsChecked == true ? project?.Find(asset) : null;
+        await ExportOne(asset, staged);
+    }
+
+    private async Task ExportOne(Asset asset, StagedTexture? staged = null)
     {
         string filter = asset.Type switch
         {
@@ -241,18 +248,13 @@ public partial class Workbench
             "texture" => "DirectDraw surface|*.dds|PNG preview|*.png",
             _ => "Stored bytes|*.bin"
         };
-        var dialog = new SaveFileDialog { Filter = filter, FileName = ExportName(asset), OverwritePrompt = false };
+        string fileName = staged is null ? ExportName(asset) : Path.GetFileNameWithoutExtension(staged.OriginalFileName) + "-staged";
+        var dialog = new SaveFileDialog { Filter = filter, FileName = fileName, OverwritePrompt = false };
         if (dialog.ShowDialog(this) != true) return;
+        bool png = asset.Type == "texture" && dialog.FilterIndex == 2;
         await Run("Exporting…", async () =>
         {
-            if (asset.Type == "texture" && dialog.FilterIndex == 2)
-            {
-                var result = await Task.Run(() => XboxAssets.ReadTexture(catalog!, asset));
-                var encoder = new PngBitmapEncoder();
-                encoder.Frames.Add(BitmapFrame.Create(Bitmap(DdsTextureReader.DecodeTexturePixels(result.Dds))));
-                LocalFiles.Write(dialog.FileName, encoder.Save);
-            }
-            else await Task.Run(() => ExportNative(catalog!, asset, dialog.FileName));
+            await Task.Run(() => WriteExport(catalog!, asset, dialog.FileName, png, staged));
             StatusLine.Text = $"Exported {Path.GetFileName(dialog.FileName)}.";
         });
     }
@@ -272,9 +274,17 @@ public partial class Workbench
         _ => ".bin"
     };
 
-    private static void ExportNative(Catalog catalog, Asset asset, string path)
+    private static void WriteExport(Catalog catalog, Asset asset, string path, bool png = false, StagedTexture? staged = null)
     {
-        if (asset.Type is "texture" or "model") XboxAssets.Export(catalog, asset, path);
+        if (png)
+        {
+            byte[] dds = staged?.Dds ?? XboxAssets.ReadTexture(catalog, asset).Dds;
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(Bitmap(DdsTextureReader.DecodeTexturePixels(dds))));
+            LocalFiles.Write(path, encoder.Save);
+        }
+        else if (staged is not null) LocalFiles.Write(path, stream => stream.Write(staged.Dds));
+        else if (asset.Type is "texture" or "model") XboxAssets.Export(catalog, asset, path);
         else LocalFiles.Write(path, stream => catalog.CopyStored(asset, stream));
     }
 }

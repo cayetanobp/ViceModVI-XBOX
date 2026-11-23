@@ -132,6 +132,8 @@ public partial class Workbench : Window
         model = null;
         links = [];
         MeshControls.Visibility = Visibility.Collapsed;
+        DictionaryControls.Visibility = Visibility.Collapsed;
+        DictionaryTextures.ItemsSource = null;
         AssetHeading.Text = asset?.Name ?? "Preview";
         string? sourcePath = asset is null ? null : catalog.SourceOf(asset).Path;
         AssetDetails.Text = asset is null ? "" : $"{Path.GetFileName(sourcePath)}\n{asset.Id} · {asset.NameOrigin}";
@@ -159,11 +161,25 @@ public partial class Workbench : Window
                 SelectMesh(this, null!);
             }
             else if (asset.Type == "texture") _ = LoadTextureAsync(asset);
+            else if (asset.Type == "dictionary")
+            {
+                var children = catalog.Assets.Where(item => item.Type == "texture" && item.ParentId == asset.Id)
+                    .OrderBy(item => item.Index).ToArray();
+                if (children.Length == 0) return;
+                DictionaryControls.Visibility = Visibility.Visible;
+                DictionaryTextures.ItemsSource = children;
+                DictionaryTextures.SelectedIndex = 0;
+            }
         }
         catch (Exception error) when (IsAssetError(error))
         {
             StatusLine.Text = error.Message;
         }
+    }
+
+    private void SelectDictionaryTexture(object sender, SelectionChangedEventArgs e)
+    {
+        if (DictionaryTextures.SelectedItem is Asset asset) _ = LoadTextureAsync(asset);
     }
 
     private void SelectMesh(object sender, SelectionChangedEventArgs e)
@@ -220,7 +236,7 @@ public partial class Workbench : Window
             using var cancellation = new CancellationTokenSource();
             textureCancellation = cancellation;
             var sourceCatalog = catalog!;
-            EditMenu.Visibility = CompareControls.Visibility = Visibility.Collapsed;
+            EditMenu.Visibility = CompareControls.Visibility = ExportTextureButton.Visibility = Visibility.Collapsed;
             if (model is not null) TextureDetails.Text = "Reading texture…";
             RefreshPreview();
             try
@@ -266,7 +282,7 @@ public partial class Workbench : Window
                 if (poolTexture) InspectPoolConversion(asset, stage);
             }
         }
-        EditMenu.Visibility = asset is null ? Visibility.Collapsed : Visibility.Visible;
+        EditMenu.Visibility = ExportTextureButton.Visibility = asset is null ? Visibility.Collapsed : Visibility.Visible;
         EditDetails.Visibility = stage is null ? Visibility.Collapsed : Visibility.Visible;
         RevertAction.Visibility = stage is null ? Visibility.Collapsed : Visibility.Visible;
         ConvertAction.Visibility = stage is not null && poolTexture ? Visibility.Visible : Visibility.Collapsed;
@@ -308,8 +324,9 @@ public partial class Workbench : Window
         if (EmptyPreview.Visibility == Visibility.Visible)
             EmptyPreview.Text = selectedAsset?.Type switch
             {
-                "texture" when textureCancellation is not null => "Reading texture…",
-                "texture" => "Texture preview unavailable. See the inspector for details.",
+                "texture" or "dictionary" when textureCancellation is not null => "Reading texture…",
+                "dictionary" when texture is null => "No textures were indexed for this dictionary.",
+                "texture" or "dictionary" => "Texture preview unavailable. See the inspector for details.",
                 "model" => "Model preview unavailable.",
                 null when catalog is null => "Open an archive or folder to get started.",
                 null => "Select a model or texture.",

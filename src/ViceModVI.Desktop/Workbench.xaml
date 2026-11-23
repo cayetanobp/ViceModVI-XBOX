@@ -177,7 +177,16 @@
                                     Foreground="{StaticResource Accent}" Background="{StaticResource Paper}"
                                     BorderBrush="{StaticResource Divider}"/>
                         </StackPanel>
+                        <StackPanel x:Name="DictionaryControls" Visibility="Collapsed" Margin="0,0,0,12">
+                            <TextBlock Text="Texture" Foreground="{StaticResource Muted}" Margin="0,0,0,4"/>
+                            <ComboBox x:Name="DictionaryTextures" DisplayMemberPath="Name"
+                                      AutomationProperties.Name="Texture in dictionary" SelectionChanged="SelectDictionaryTexture"/>
+                        </StackPanel>
                         <TextBlock x:Name="TextureDetails" Style="{StaticResource DetailText}" Margin="0,0,0,12"/>
+                        <Button x:Name="ExportTextureButton" Content="Export texture…" Click="ExportPreviewTexture"
+                                Visibility="Collapsed" HorizontalAlignment="Left" Padding="7,4" Margin="0,0,0,8"
+                                Foreground="{StaticResource Accent}" Background="{StaticResource Paper}"
+                                BorderBrush="{StaticResource Divider}"/>
                         <Menu x:Name="EditMenu" Style="{StaticResource CommandMenu}" HorizontalAlignment="Left"
                               Visibility="Collapsed">
                             <MenuItem Header="_Edit texture ▾" Style="{StaticResource MenuTrigger}"
