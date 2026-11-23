@@ -26,6 +26,7 @@ public partial class Workbench : Window
     private bool busy;
     private bool closeAfterOpening;
     private CancellationTokenSource? openingCancellation;
+    private CancellationTokenSource? textureCancellation;
     private TextureConversionPlan? poolConversion;
     private Point? drag;
     private Point3D center;
@@ -63,7 +64,6 @@ public partial class Workbench : Window
         updating = false;
         FilterChanged(this, new RoutedEventArgs());
         LoadAsset(null);
-        EmptyPreview.Text = "Select a model or texture.";
         int ranges = loaded.Assets.Count(asset => asset.Type == "unknown");
         int models = loaded.Assets.Count(asset => asset.Type == "model");
         StatusLine.Text = $"{models:N0} models · " +
@@ -136,7 +136,7 @@ public partial class Workbench : Window
         string? sourcePath = asset is null ? null : catalog.SourceOf(asset).Path;
         AssetDetails.Text = asset is null ? "" : $"{Path.GetFileName(sourcePath)}\n{asset.Id} · {asset.NameOrigin}";
         AssetDetails.ToolTip = asset is null ? null : $"{sourcePath}\n{asset.Evidence}";
-        LoadTexture(null);
+        _ = LoadTextureAsync(null);
         if (asset is null) return;
         try
         {
@@ -158,7 +158,7 @@ public partial class Workbench : Window
                 updating = false;
                 SelectMesh(this, null!);
             }
-            else if (asset.Type == "texture") LoadTexture(asset);
+            else if (asset.Type == "texture") _ = LoadTextureAsync(asset);
         }
         catch (Exception error) when (IsAssetError(error))
         {
@@ -200,11 +200,13 @@ public partial class Workbench : Window
         LinkDetails.ToolTip = link is null ? null : $"{link.Reason}\n{link.Key ?? "Key unavailable"}" +
             string.Concat(link.Candidates.Select(candidate => $"\n{candidate.Source} · {candidate.AssetId}"));
         ShowLinked.Visibility = link?.TextureId is not null ? Visibility.Visible : Visibility.Collapsed;
-        LoadTexture(link?.TextureId is string id ? catalog!.Get(id) : null);
+        _ = LoadTextureAsync(link?.TextureId is string id ? catalog!.Get(id) : null);
     }
 
-    private void LoadTexture(Asset? asset)
+    private async Task LoadTextureAsync(Asset? asset)
     {
+        textureCancellation?.Cancel();
+        textureCancellation = null;
         texture = asset;
         textureInfo = null;
         poolConversion = null;
@@ -215,17 +217,37 @@ public partial class Workbench : Window
         bool poolTexture = asset is not null && catalog!.SourceOf(asset).Format == "ttpf";
         if (asset is not null)
         {
+            using var cancellation = new CancellationTokenSource();
+            textureCancellation = cancellation;
+            var sourceCatalog = catalog!;
+            EditMenu.Visibility = CompareControls.Visibility = Visibility.Collapsed;
+            if (model is not null) TextureDetails.Text = "Reading texture…";
+            RefreshPreview();
             try
             {
-                var (dds, info) = XboxAssets.ReadTexture(catalog!, asset);
+                var (pixels, info) = await Task.Run(() =>
+                {
+                    var (dds, export) = XboxAssets.ReadTexture(sourceCatalog, asset, cancellation.Token);
+                    return (DdsTextureReader.DecodeTexturePixels(dds), export);
+                }, cancellation.Token);
+                if (cancellation.IsCancellationRequested) return;
                 textureInfo = info;
-                originalImage = Bitmap(DdsTextureReader.DecodeTexturePixels(dds));
+                originalImage = Bitmap(pixels);
                 TextureDetails.Text = $"{info.SourceWidth} × {info.SourceHeight} · DXGI {info.SourceFormat}\n" +
                     $"{info.ExportedMips}/{info.SourceMips} mips · starts at {info.BaseMip}";
             }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                return;
+            }
             catch (Exception error) when (IsAssetError(error))
             {
+                if (cancellation.IsCancellationRequested) return;
                 TextureDetails.Text = error.Message;
+            }
+            finally
+            {
+                if (textureCancellation == cancellation) textureCancellation = null;
             }
             if (stage is not null)
             {
@@ -249,9 +271,11 @@ public partial class Workbench : Window
         RevertAction.Visibility = stage is null ? Visibility.Collapsed : Visibility.Visible;
         ConvertAction.Visibility = stage is not null && poolTexture ? Visibility.Visible : Visibility.Collapsed;
         ConvertAction.IsEnabled = poolConversion is not null;
+        ShowOriginal.IsEnabled = originalImage is not null;
         ShowReplacement.IsEnabled = replacementImage is not null;
         CompareControls.Visibility = replacementImage is null ? Visibility.Collapsed : Visibility.Visible;
         if (replacementImage is null) ShowOriginal.IsChecked = true;
+        else if (originalImage is null) ShowReplacement.IsChecked = true;
         RefreshPreview();
     }
 
@@ -281,6 +305,16 @@ public partial class Workbench : Window
         TextureImage.Visibility = choice is null && image is not null ? Visibility.Visible : Visibility.Collapsed;
         Viewport.Visibility = choice is null ? Visibility.Collapsed : Visibility.Visible;
         EmptyPreview.Visibility = choice is null && image is null ? Visibility.Visible : Visibility.Collapsed;
+        if (EmptyPreview.Visibility == Visibility.Visible)
+            EmptyPreview.Text = selectedAsset?.Type switch
+            {
+                "texture" when textureCancellation is not null => "Reading texture…",
+                "texture" => "Texture preview unavailable. See the inspector for details.",
+                "model" => "Model preview unavailable.",
+                null when catalog is null => "Open an archive or folder to get started.",
+                null => "Select a model or texture.",
+                _ => "No preview is available for this entry."
+            };
         ModelScene.Content = choice is null ? null : MeshScene(model!.Meshes[choice.Index], image);
     }
 
@@ -377,16 +411,17 @@ public partial class Workbench : Window
     private async Task StageTextureFile(string path, Asset asset)
     {
         await Task.Run(() => project!.Stage(catalog!, asset, path, TextureConversion.Import(path)));
-        LoadTexture(asset);
+        await LoadTextureAsync(asset);
         if (replacementImage is not null) ShowReplacement.IsChecked = true;
         StatusLine.Text = "Replacement staged for this session.";
     }
 
-    private void RevertReplacement(object sender, RoutedEventArgs e)
+    private async void RevertReplacement(object sender, RoutedEventArgs e)
     {
         if (texture is not { } asset || project?.Revert(asset) != true) return;
-        LoadTexture(asset);
-        StatusLine.Text = "Original texture restored.";
+        await LoadTextureAsync(asset);
+        if (texture == asset)
+            StatusLine.Text = originalImage is null ? "Replacement cleared." : "Original texture restored.";
     }
 
     private async void ConvertForPool(object sender, RoutedEventArgs e)
@@ -458,6 +493,7 @@ public partial class Workbench : Window
         if (!busy)
         {
             e.Cancel = !CanDiscard();
+            if (!e.Cancel) textureCancellation?.Cancel();
             return;
         }
 

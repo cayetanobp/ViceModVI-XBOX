@@ -7,10 +7,23 @@
     <LocalExplorerCore>$(MSBuildThisFileDirectory)../../.local/rpf9-explorer/Core/RpfPreview.Core.csproj</LocalExplorerCore>
     <RpfExplorerCore Condition="'$(RpfExplorerCore)' == '' and Exists('$(LocalExplorerCore)')">$(LocalExplorerCore)</RpfExplorerCore>
     <RpfExplorerCore Condition="'$(RpfExplorerCore)' == ''">$(MSBuildThisFileDirectory)../../../Leonida/third_party/rpf9-explorer/Core/RpfPreview.Core.csproj</RpfExplorerCore>
+    <LocalLeonidaTextureTools>$(MSBuildThisFileDirectory)../../.local/leonida-ttpf/tools</LocalLeonidaTextureTools>
+    <LeonidaTextureTools Condition="'$(LeonidaTextureTools)' == '' and Exists('$(LocalLeonidaTextureTools)/ttpf_mips.py')">$(LocalLeonidaTextureTools)</LeonidaTextureTools>
+    <LeonidaTextureTools Condition="'$(LeonidaTextureTools)' == ''">$(MSBuildThisFileDirectory)../../../Leonida/tools</LeonidaTextureTools>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="$(RpfExplorerCore)" />
     <PackageReference Include="Magick.NET-Q8-AnyCPU" Version="15.1.0" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(LeonidaTextureTools)/ttpf_mips.py') and Exists('$(LeonidaTextureTools)/tex_headers.py') and Exists('$(LeonidaTextureTools)/bcpack.py') and Exists('$(LeonidaTextureTools)/bcpack_tables.py') and Exists('$(LeonidaTextureTools)/bcpack_tables_bptc.py')">
+    <Content Include="../../tools/ttpf/preview_dds.py" Link="ttpf-tools/preview_dds.py"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
+    <Content Include="$(LeonidaTextureTools)/ttpf_mips.py;$(LeonidaTextureTools)/tex_headers.py;$(LeonidaTextureTools)/bcpack.py;$(LeonidaTextureTools)/bcpack_tables.py"
+             Link="ttpf-tools/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
+    <Content Include="$(LeonidaTextureTools)/bcpack_tables_bptc.py"
+             Link="ttpf-tools/bcpack_tables_bptc.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
+    <Content Include="$(LeonidaTextureTools)/../LICENSE" Condition="Exists('$(LeonidaTextureTools)/../LICENSE')"
+             Link="ttpf-tools/LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
   </ItemGroup>
   <Target Name="CheckExplorerCore" BeforeTargets="PrepareForBuild" Condition="!Exists('$(RpfExplorerCore)')">
     <Error Text="rpf9-explorer Core was not found at $(RpfExplorerCore). See the pinned checkout and build commands in README.md." />

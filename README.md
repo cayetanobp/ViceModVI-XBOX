@@ -97,6 +97,33 @@ source tree to narrow the list and search results. The status bar reports scan
 progress. Closing the viewer during indexing keeps completed source indexes.
 To measure an uncached CLI scan, use `catalog OUTPUT --fresh INPUT`.
 
+### BCPack texture previews
+
+ViceModVI uses the Leonida decoder when the main TTPF reader finds a texture
+with no readable mips because of BCPack. Preview and DDS export use the first
+contiguous mip range that decodes in strict mode. The inspector reports the
+starting mip and available count. Native archive write support follows the
+original storage profile.
+
+Use Python 3 on PATH. The build looks for the decoder files in
+`.local/leonida-ttpf/tools` or `../Leonida/tools` and copies them beside the
+executables. To set up the tested revision before building, run these commands
+from the repository root.
+
+```powershell
+$revision = '03b09a086592a197db64d91655c6e65c30764d96'
+$upstream = "https://raw.githubusercontent.com/ItsNotRexed/Leonida/$revision"
+$decoder = '.local/leonida-ttpf'
+New-Item -ItemType Directory -Force -Path "$decoder/tools" | Out-Null
+foreach ($file in 'ttpf_mips.py', 'tex_headers.py', 'bcpack.py', 'bcpack_tables.py', 'bcpack_tables_bptc.py') {
+    Invoke-WebRequest "$upstream/tools/$file" -OutFile "$decoder/tools/$file"
+}
+Invoke-WebRequest "$upstream/LICENSE" -OutFile "$decoder/LICENSE"
+```
+
+The decoder uses verified history tables. Some BCPack textures still lack a
+readable mip when their history data is incomplete. [Leonida texture notes](https://github.com/ItsNotRexed/Leonida/blob/03b09a086592a197db64d91655c6e65c30764d96/docs/textures.md)
+
 ### Expanded model coverage
 
 An optional Rust helper inventories RPFs, lists individual drawables, and
