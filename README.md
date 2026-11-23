@@ -35,8 +35,8 @@ in the game and restoring the original are pending.
 | Browse and search | **● Available** | Open a single archive or a folder. Search by name, asset ID, type, source path, hash, or offset. [Catalog evidence](PENDING.md#mf-01--catalog-and-byte-offset-reads) |
 | Preview and export | **● Available** | Preview textures and static meshes. Export DDS or OBJ, save a single texture as PNG, or export a batch. [Viewer evidence](PENDING.md#mf-07--browse-preview-export-and-edit-in-one-place) |
 | Texture replacements | **● Available** | Compare a staged image on the mesh, export the staged DDS, or revert the edit. [Desktop walkthrough](#local-replacement-workflow) |
-| TTPF copies | **◈ Verified offline** | Replace one texture in a compatible RDS5 pool through the CLI. [TTPF checks](#experimental-ttpf-copy) |
-| RPF9 copies | **◈ Verified offline** | Replace one 2D texture in a recovered dictionary when the changed segments retain their packed lengths. [RPF9 checks](#experimental-rpf9-copy) |
+| TTPF copies | **● Available** | Replace one texture in a compatible RDS5 pool through the CLI. [TTPF checks](#experimental-ttpf-copy) |
+| RPF9 copies | **● Available** | Replace one 2D texture in a recovered dictionary when the changed segments retain their packed lengths. [RPF9 checks](#experimental-rpf9-copy) |
 | Installation-wide index | **○ Pending** | Persist a game-wide index and reuse it when browsing a subfolder. [Roadmap](PENDING.md#mf-08--installation-root-and-incremental-global-index) |
 
 See [pending work](PENDING.md) for acceptance criteria and planned index packs.
