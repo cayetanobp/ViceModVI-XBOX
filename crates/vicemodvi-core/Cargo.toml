@@ -1,0 +1,33 @@
+[package]
+name = "vicemodvi-core"
+description = "Catalog, verification, conversion and copy writers for ViceModVI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rpf9-identify = { path = "../../tools/model-reader/vendor/03-format-identifier" }
+rpf9-index = { path = "../../tools/model-reader/vendor/02-rpf-index-extractor" }
+rpf9-models = { path = "../../tools/model-reader/vendor/04-resource-readers/models" }
+
+adler2 = "2"
+base64 = "0.22"
+bcdec_rs = "0.2"
+block_compression = { version = "0.11", default-features = false, features = ["bc7"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+half = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "tiff", "tga", "webp", "ico", "qoi", "exr", "hdr", "pnm", "dds"] }
+psd = "0.3"
+rayon = "1.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tempfile = "3"
+texpresso = { version = "2", features = ["rayon"] }
+
+[dev-dependencies]

@@ -13,6 +13,7 @@ Choose a task that can be closed with the listed evidence. Tasks are ordered by 
 | MF-07 | Simplify browsing, previews, exports, and edits | MF-02, MF-03, MF-04 | Completed |
 | MF-08 | Installation root and incremental global index | MF-01, MF-03 | Pending |
 | MF-09 | Prebuilt index packs by platform and build | MF-08 | Proposed |
+| MF-10 | Rust port parity on the reference sample | MF-01 to MF-07 | Synthetic tests pass, sample run pending |
 
 ## MF-01 · Catalog and byte-offset reads
 
@@ -28,7 +29,7 @@ Connect existing readers to catalog entries. Compare the output with existing ma
 
 **Acceptance.** Export a reference texture and mesh from the catalog. Reopen each output and verify texture dimensions and available mips, or vertex and face counts for the mesh. Identify the decoder used and distinguish complete outputs from partial ones.
 
-**Evidence.** `RageModelDecoder` exported `0:model:203F010` with 24 vertices, 12 triangles, two meshes, and two source materials. Reopening the OBJ gave the same vertex, triangle, and mesh counts as the Leonida manifest. OBJ covers static geometry and UVs. `TtpfReader` exported `3:ttpf:0` as a 512 × 512 DXGI 71 DDS with 3 of 8 source mips. The reopened header matched the TTPF manifest. The OBJ and DDS both matched Leonida's `rpf9dump` exports byte for byte. Both decoders use the same pinned rpf9-explorer Core revision. [Setup instructions](README.md#build)
+**Evidence.** Recorded with the earlier C# build: the drawable decoder exported `0:model:203F010` with 24 vertices, 12 triangles, two meshes, and two source materials. Reopening the OBJ gave the same vertex, triangle, and mesh counts as the Leonida manifest. OBJ covers static geometry and UVs. The pool reader exported `3:ttpf:0` as a 512 × 512 DXGI 71 DDS with 3 of 8 source mips. The reopened header matched the TTPF manifest. The OBJ and DDS both matched Leonida's `rpf9dump` exports byte for byte. [MF-10](#mf-10--rust-port-parity-on-the-reference-sample) tracks repeating this with the current readers. [Setup instructions](README.md#build)
 
 ## MF-03 · Resolve materials and textures
 
@@ -64,7 +65,7 @@ Document which RPF9 metadata remains uninterpreted and what a writer needs to pr
 
 **Acceptance per platform.** Apply and revert a reproducible change on a copy and verify that the game reads the result. Each platform requires its own test and compatibility record.
 
-**Research evidence.** The Xbox Series 1.0.2.1 sample has a root `9FPR` header and five observed nested headers. The root table spans `0x40–0xAA0` with its end excluded. The words at `0x08` and `0x0C` delimit internal regions whose record layouts remain unverified. The root word at `0x24` is 39, while the five observed nested headers and the recovered payload counts give different totals. Resource recovery locates zlib segments and reconstructs validated assets. The original path and member records, archive nesting rules, and integrity fields remain unresolved. The external Core reader likewise reports an undecoded native directory. [Pinned rpf9-explorer source](https://github.com/breadbbbb/rpf9-explorer/tree/48557ead00601d3757ba12b894f2595c4faad2a5/Core)
+**Research evidence.** The Xbox Series 1.0.2.1 sample has a root `9FPR` header and five observed nested headers. The root table spans `0x40–0xAA0` with its end excluded. The words at `0x08` and `0x0C` delimit internal regions whose record layouts remain unverified. The root word at `0x24` is 39, while the five observed nested headers and the recovered payload counts give different totals. Resource recovery locates zlib segments and reconstructs validated assets. The original path and member records, archive nesting rules, and integrity fields remain unresolved.
 
 An Xbox writer needs the verified member and directory layouts, offsets and lengths, compression and alignment requirements, and any integrity metadata affected by a replacement. It needs a supported way to apply a copy on the target platform. Validation requires reopening a no-change round trip, applying one identifiable replacement to a fresh copy, checking an unaffected entry, and reverting by reapplying the original. Record both archive fingerprints and the exact platform and game build used for the runtime check.
 
@@ -109,6 +110,28 @@ Prepare optional index packs for verified releases. Key each pack by platform, p
 On first setup, look up an index pack from the local manifest. Treat a manifest match as a starting point and check each local container against the pack before relying on offsets. Start with a cheap comparison using file size and sampled bytes. Use a stronger check when a container is suspect and verify the full source fingerprint before a write. Import matching entries, scan containers that are new or differ, and mark missing containers unavailable. An unknown build can still open and build its own index. Track pack provenance and compare results across versions before introducing any cross-version reuse.
 
 **Acceptance.** Use an index pack on a matching build and compare the resulting catalog with a full local scan. Repeat with one changed container, one new container, and one missing container. Record which containers were reused or scanned and compare the time to first usable view against a fresh scan.
+
+## MF-10 · Rust port parity on the reference sample
+
+The C# and WPF build was replaced by Rust crates and an egui viewer. The
+evidence in MF-01 to MF-07 was recorded with the C# build. Repeat it with the
+Rust build on the **Xbox Series 1.0.2.1** sample.
+
+**Done when.** The [sample commands](README.md#reproduce-the-sample) produce the
+same asset counts and identifiers as a catalog written by the C# build, the
+DDS and OBJ exports match byte for byte, `write-rpf-copy` with the untouched
+DDS reproduces the original SHA-256, and the TTPF and RPF9 copies reopen with
+the edited texture. Record the catalog build time of both builds on the same
+machine, uncached and cached.
+
+**Known differences.** Previews decode BC blocks with `bcdec_rs` instead of
+BCnEncoder.Net, so a few preview pixels can differ by one step. Conversions
+encode BC1 to BC5 with `texpresso` and BC7 with `block_compression`, and
+resample without ImageMagick, so converted DDS bytes differ from the C# build.
+Native DDS exports and verified copies do not depend on these libraries. OBJ
+files write floats in the shortest round-trip form without exponents. The
+source index cache moved to revision 3, so the first open after upgrading
+indexes each source again.
 
 ## Reporting progress
 
