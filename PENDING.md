@@ -13,6 +13,7 @@ Choose a task that can be closed with the listed evidence. Tasks are ordered by 
 | MF-07 | Simplify browsing, previews, exports, and edits | MF-02, MF-03, MF-04 | Completed |
 | MF-08 | Installation root and incremental global index | MF-01, MF-03 | Pending |
 | MF-09 | Prebuilt index packs by platform and build | MF-08 | Proposed |
+| MF-10 | Rust port parity on the reference sample | MF-01 to MF-07 | Synthetic tests pass, sample run pending |
 
 ## MF-01 · Catalog and byte-offset reads
 
@@ -109,6 +110,28 @@ Prepare optional index packs for verified releases. Key each pack by platform, p
 On first setup, look up an index pack from the local manifest. Treat a manifest match as a starting point and check each local container against the pack before relying on offsets. Start with a cheap comparison using file size and sampled bytes. Use a stronger check when a container is suspect and verify the full source fingerprint before a write. Import matching entries, scan containers that are new or differ, and mark missing containers unavailable. An unknown build can still open and build its own index. Track pack provenance and compare results across versions before introducing any cross-version reuse.
 
 **Acceptance.** Use an index pack on a matching build and compare the resulting catalog with a full local scan. Repeat with one changed container, one new container, and one missing container. Record which containers were reused or scanned and compare the time to first usable view against a fresh scan.
+
+## MF-10 · Rust port parity on the reference sample
+
+The C# and WPF build was replaced by Rust crates and an egui viewer. The
+evidence in MF-01 to MF-07 was recorded with the C# build. Repeat it with the
+Rust build on the **Xbox Series 1.0.2.1** sample.
+
+**Done when.** The [sample commands](README.md#reproduce-the-sample) produce the
+same asset counts and identifiers as a catalog written by the C# build, the
+DDS and OBJ exports match byte for byte, `write-rpf-copy` with the untouched
+DDS reproduces the original SHA-256, and the TTPF and RPF9 copies reopen with
+the edited texture. Record the catalog build time of both builds on the same
+machine, uncached and cached.
+
+**Known differences.** Previews decode BC blocks with `bcdec_rs` instead of
+BCnEncoder.Net, so a few preview pixels can differ by one step. Conversions
+encode BC1 to BC5 with `texpresso` and BC7 with `block_compression`, and
+resample without ImageMagick, so converted DDS bytes differ from the C# build.
+Native DDS exports and verified copies do not depend on these libraries. OBJ
+files write floats in the shortest round-trip form without exponents. The
+source index cache moved to revision 3, so the first open after upgrading
+indexes each source again.
 
 ## Reporting progress
 

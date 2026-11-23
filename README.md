@@ -64,36 +64,43 @@ and animations require separate support.
 
 ## Build
 
-Use **Windows**, the **.NET 10 SDK** with Windows Desktop Runtime, **Git**, and **Rust with the MSVC build tools**.
-The WPF viewer build also builds the CLI. For the sample CLI walkthrough, you
-also need Python 3 and Leonida's `rpf9_carve.py`, or a compatible inventory TSV.
+Use **Windows**, **Git**, and stable **Rust with the MSVC build tools**. One
+`cargo build` produces the CLI and the desktop viewer as standalone
+executables. No .NET runtime or separate DLL is required. For the sample CLI
+walkthrough, you also need Python 3 and Leonida's `rpf9_carve.py`, or a
+compatible inventory TSV.
 
-Run from the ViceModVI-XBOX repository root. Set up the pinned Core reader in
-`.local` or use an initialized `../Leonida/third_party/rpf9-explorer` checkout
-at the same revision. The build checks the local checkout first. Set
-`RpfExplorerCore` to the `Core/RpfPreview.Core.csproj` path for a custom location.
+Run from the ViceModVI-XBOX repository root. The build expects the Rust port of
+the pinned rpf9-explorer Core reader at `.local/rpf9-explorer-rs`. Git ignores
+that folder.
 
 <details>
-<summary>Set up the pinned rpf9-explorer reader</summary>
+<summary>About the pinned rpf9-explorer reader</summary>
 
-```powershell
-git clone --no-checkout https://github.com/breadbbbb/rpf9-explorer.git .local/rpf9-explorer
-git -C .local/rpf9-explorer checkout --detach 48557ead00601d3757ba12b894f2595c4faad2a5
-$compactMipPatch = (Resolve-Path tools/rpf9-explorer-compact-a8.patch).Path
-git -C .local/rpf9-explorer apply $compactMipPatch
-```
-
-Core targets .NET 8 and restores BCnEncoder.Net 2.3.0. The first build also
-restores ViceModVI's dependencies from NuGet, including the
-[Magick.NET Q8 raster decoder](https://www.nuget.org/packages/Magick.NET-Q8-AnyCPU/15.1.0).
+The port follows rpf9-explorer revision
+`48557ead00601d3757ba12b894f2595c4faad2a5` with
+`tools/rpf9-explorer-compact-a8.patch` applied. It covers the TTPF, RDS5,
+texture dictionary, DDS, drawable, OBJ, and recovery readers that ViceModVI
+uses. The upstream revision lacks a repository-level license, so the port stays
+out of the repository and out of distributable builds until upstream grants
+permission. See [License](#license).
 
 </details>
 
 ```powershell
-dotnet build src/ViceModVI.Desktop -c Release --artifacts-path .local/build
-$cli = (Resolve-Path .local/build/bin/ViceModVI/release/ViceModVI.exe).Path
-$viewer = (Resolve-Path .local/build/bin/ViceModVI.Desktop/release/ViceModVI.Desktop.exe).Path
+cargo build --release
+$cli = (Resolve-Path target/release/vicemodvi.exe).Path
+$viewer = (Resolve-Path target/release/vicemodvi-desktop.exe).Path
 & $viewer
+```
+
+`cargo test --workspace` runs the unit tests and end-to-end checks on synthetic
+RPF9 and TTPF files. To try the viewer without game files, write the same
+synthetic sources to a folder and open it:
+
+```powershell
+cargo run -p vicemodvi-core --example synthetic -- .local/synthetic
+& $viewer (Resolve-Path .local/synthetic).Path
 ```
 
 In the viewer, choose **Open file** or **Open folder**. Select a node in the
@@ -101,13 +108,16 @@ source tree to narrow the list and search results. The status bar reports scan
 progress. Closing the viewer during indexing keeps completed source indexes.
 To measure an uncached CLI scan, use `catalog OUTPUT --fresh INPUT`.
 
+Folders are indexed in parallel, one source per worker, and the model and
+texture candidates of each RPF are validated in parallel batches. Catalog
+JSON and `.vmp` files written by the C# build still load.
+
 ### Model reader
 
-The build compiles the in-repo Rust model reader and includes
-`vicemodvi_models.dll` in the Windows output. The desktop viewer and CLI call the
-library directly. The reader inventories RPFs, lists individual drawables,
-and decodes supported geometry on selection or export. Supported materials can
-resolve diffuse textures by full native key across the loaded TTPF pools.
+The CLI and the viewer link the in-repo Rust model reader directly. The reader
+inventories RPFs, lists individual drawables, and decodes supported geometry on
+selection or export. Supported materials can resolve diffuse textures by full
+native key across the loaded TTPF pools.
 
 The vendored crates are from `gta6-resource-tools` revision
 `3e6f69cb840112dc7b198f2e23a14520e493dc23` with the indexing and progress patch
@@ -136,10 +146,11 @@ The expected SHA-256 of `core_restofworld.rpf` is
    preview or on the mesh. Choose **Export staged DDS** to keep the edit as
    a file, or **Revert replacement** to clear it.
 
-Supported DDS files are staged byte for byte. Raster imports such as PNG, JPEG,
-TGA, and WebP become a one-mip 8-bit BGRA DDS. For animated, paged, or layered
-images, the reader uses the first image or composite. Some DDS encodings can
-also use the raster decoder as a fallback.
+Supported DDS files are staged byte for byte. Raster imports become a one-mip
+8-bit BGRA DDS: PNG and APNG, JPEG, BMP, GIF, TIFF, TGA, WebP, ICO, QOI,
+OpenEXR, Radiance HDR, the PNM family, and PSD. For animated, paged, or layered
+images, the reader uses the first image or the PSD composite. Some legacy DDS
+encodings can also use the raster decoder as a fallback.
 
 <details>
 <summary>CLI commands for catalog, export, and reference checks</summary>
