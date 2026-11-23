@@ -37,7 +37,7 @@ in the game and restoring the original are pending.
 | Texture replacements | **● Available** | Compare a staged image on the mesh, export the staged DDS, or revert the edit. [Desktop walkthrough](#local-replacement-workflow) |
 | TTPF copies | **● Available** | Replace one texture in a compatible RDS5 pool through the CLI. [TTPF checks](#experimental-ttpf-copy) |
 | RPF9 copies | **● Available** | Replace one 2D texture in a recovered dictionary when the changed segments retain their packed lengths. [RPF9 checks](#experimental-rpf9-copy) |
-| Installation-wide index | **○ Pending** | Persist a game-wide index and reuse it when browsing a subfolder. [Roadmap](PENDING.md#mf-08--installation-root-and-incremental-global-index) |
+| Installation-wide index | **● Available** | Load a saved installation catalog from the game root, browse individual folders, and resolve linked textures across indexed archives. [Details](PENDING.md#mf-08--installation-root-and-incremental-global-index) |
 
 See [pending work](PENDING.md) for acceptance criteria and planned index packs.
 PS5 and PC game assets still need their own format profiles and platform tests.
@@ -276,3 +276,5 @@ SHA-256. The copy preserves the archive size and directory bytes.
 
 ViceModVI's own code is released under the [GNU GPL v3 or later](LICENSE)
 (`GPL-3.0-or-later`). Game files retain their respective rights.
+
+During development, we used tools and inventory output from [Leonida](https://github.com/ItsNotRexed/Leonida), a project licensed under GNU GPL v3, to help locate certain resources within game archives. ViceModVI does not include the game files or an installation catalog.

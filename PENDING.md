@@ -11,7 +11,7 @@ Choose a task that can be closed with the listed evidence. Tasks are ordered by 
 | MF-05 | Experimental TTPF copy writer | MF-02 for format validation, MF-04 for integration | Completed |
 | MF-06 | RPF9 writing and change distribution | Native metadata and in-game verification per platform | Offline copy verified, Xbox test pending |
 | MF-07 | Simplify browsing, previews, exports, and edits | MF-02, MF-03, MF-04 | Completed |
-| MF-08 | Installation root and incremental global index | MF-01, MF-03 | Pending |
+| MF-08 | Installation-wide index | MF-01, MF-03 | Available |
 | MF-09 | Prebuilt index packs by platform and build | MF-08 | Proposed |
 | MF-10 | Rust port parity on the reference sample | MF-01 to MF-07 | Synthetic tests pass, sample run pending |
 
@@ -97,11 +97,19 @@ The RPF9 edit changed one visible pixel and rewrote one segment. The TTPF edit c
 
 ## MF-08 · Installation root and incremental global index
 
-Prompt once for the game root when the user sets up an installation. Read its manifest or configuration to identify the platform, package identity, and build. Persist the root and keep its index separate from the temporary catalog used for the folder currently open. The folder sets the view. The installation index supplies cross-folder texture and other dependency lookups.
+**Available.** Open the game root with **Open folder**. ViceModVI loads
+`vicemodvi-catalog.json` from that folder when present. Select a folder in the
+source tree to narrow the view while keeping the full catalog available for
+cross-folder texture lookups. If the installation has moved or been renamed,
+the viewer resolves the saved paths under the selected root and checks the
+source fingerprints. A scan without a saved catalog reuses valid per-source
+index caches.
 
-Build and save the inventory one container at a time. Keep locators for known resources and for unclassified ranges, including relative path, offsets, lengths, and available signatures. Track the versions of inventory and format readers independently so a new reader can revisit candidate ranges without throwing away established model and texture records. Save finished containers atomically, report progress by phase, and resume at the first container that still needs work.
+**Follow-up.** Detect the platform and build from the installation manifest.
+Refresh changed containers in an existing saved catalog while reusing unchanged
+entries. Track reader versions so new format support can revisit unclassified
+ranges without rescanning every container.
 
-**Acceptance.** Interrupt a first scan and reopen the installation. Finished containers are reused. Opening a subfolder still resolves a model's confirmed texture from a separate folder. Changing one container only invalidates that container. Adding a reader can reclassify candidate ranges in an unchanged container from the saved inventory.
 
 ## MF-09 · Import a prebuilt index by platform and build
 
