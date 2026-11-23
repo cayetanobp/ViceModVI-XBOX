@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/leonida-logo.jpg" alt="Leonida logo" width="200">
+  <img src="assets/leonida-logo-transparent.png" alt="Leonida logo" width="200">
 </p>
 
 <h1 align="center">ViceModVI - Xbox</h1>
@@ -285,12 +285,6 @@ DDS to `write-rpf-copy` with a fresh destination reproduces the original archive
 SHA-256. The copy preserves the archive size and directory bytes.
 
 </details>
-
-## Credits
-
-- Core archive and texture readers come from [breadbbbb's rpf9-explorer](https://github.com/breadbbbb/rpf9-explorer).
-- The sample inventory and cross-checks use tools from [Leonida](https://github.com/ItsNotRexed/Leonida).
-- The optional drawable reader builds on [gta6-resource-tools](https://github.com/cayetanobp/gta6-resource-tools).
 
 ## License
 
