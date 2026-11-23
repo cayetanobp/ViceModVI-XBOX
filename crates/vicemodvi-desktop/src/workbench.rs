@@ -12,9 +12,9 @@ use eframe::egui::{
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use vicemodvi_core::{
     catalog::group_digits,
-    dds, files, pool_writer,
+    dds, files,
     project::{ReplacementProject, StagedTexture},
-    texture_conversion::{self, TextureConversionPlan, TextureShape, IMAGE_EXTENSIONS},
+    texture_conversion::{self, TextureShape, IMAGE_EXTENSIONS},
     texture_links::{self, TextureIndex, TextureLink},
     xbox_assets::{self, BuildOptions, TextureExport},
     Asset, Cancel, Catalog, Error, IndexProgress, Model, Pixels, Result,
@@ -43,6 +43,7 @@ const WHITE_DIFFUSE: &str = "0000000082079169";
 enum Done {
     Workspace(Catalog, Option<PathBuf>),
     Staged { asset: usize, path: PathBuf, dds: Vec<u8> },
+    Confirmed { asset: usize },
     Status(String),
     Batch { exported: usize, total: usize, failures: Vec<String> },
 }
@@ -70,7 +71,7 @@ struct TexturePreview {
     info: Option<TextureExport>,
     original: Option<Pixels>,
     replacement: Option<Pixels>,
-    conversion: Option<TextureConversionPlan>,
+    confirmed: bool,
     details: String,
     edit_details: String,
 }
@@ -80,11 +81,10 @@ struct Preview {
     info: Option<TextureExport>,
     original: Option<Picture>,
     replacement: Option<Picture>,
-    conversion: Option<TextureConversionPlan>,
+    confirmed: bool,
     details: String,
     edit_details: String,
     staged: bool,
-    pool: bool,
 }
 
 pub struct Workbench {
@@ -246,7 +246,7 @@ impl Workbench {
             if folder {
                 let saved = path.join("vicemodvi-catalog.json");
                 if saved.is_file() {
-                    return Ok(Done::Workspace(Catalog::load(&saved)?, Some(path)));
+                    return Ok(Done::Workspace(Catalog::load_for_folder(&saved, &path, cancel)?, Some(path)));
                 }
             }
             let sources = if folder { xbox_assets::source_files(&path)? } else { vec![path.clone()] };
@@ -470,6 +470,21 @@ impl Workbench {
                     .collect()
             })
             .unwrap_or_default();
+        if self.material.is_some_and(|shader| !self.preview_choices.contains_key(&shader)) {
+            if let Some((model, shader)) = self.model.as_ref().zip(self.material) {
+                let saved = material_texture_path(&catalog, &catalog.assets[model.asset], shader)
+                    .ok().and_then(|path| std::fs::read_to_string(path).ok());
+                if let Some(saved) = saved {
+                    let matched = choices.iter().filter_map(|(id, _)| id.as_ref()).find(|id| {
+                        catalog.get(id).ok().and_then(|entry| confirmed_texture_path(&catalog, entry).ok())
+                            .is_some_and(|path| path.file_name().is_some_and(|name| name == saved.as_str()) && path.is_file())
+                    });
+                    if let Some(id) = matched {
+                        chosen = Some(id.clone());
+                    }
+                }
+            }
+        }
         if !choices.is_empty() && link.as_ref().is_some_and(|l| l.texture_id.is_none()) {
             choices.insert(0, (None, "Choose a texture for preview".into()));
         }
@@ -497,8 +512,7 @@ impl Workbench {
         self.show_replacement = false;
         let (Some(asset), Some(catalog)) = (asset, self.catalog.clone()) else { return };
         let stage = self.project.find(&catalog.assets[asset]).cloned();
-        let pool = catalog.source_of(&catalog.assets[asset]).is_ok_and(|s| s.format == "ttpf");
-        let job = Job::spawn(&self.ctx, move |cancel| read_preview(&catalog, asset, stage.as_ref(), pool, cancel));
+        let job = Job::spawn(&self.ctx, move |cancel| read_preview(&catalog, asset, stage.as_ref(), cancel));
         self.texture_job = Some((asset, job));
     }
 
@@ -506,7 +520,6 @@ impl Workbench {
         let Some(catalog) = &self.catalog else { return };
         let entry = &catalog.assets[asset];
         let staged = self.project.find(entry).is_some();
-        let pool = catalog.source_of(entry).is_ok_and(|s| s.format == "ttpf");
         let picture = |pixels: Pixels, label: &str| {
             let display = fit_pixels(&pixels, ctx.input(|i| i.max_texture_side));
             let size = [display.width as usize, display.height as usize];
@@ -514,8 +527,10 @@ impl Workbench {
             for p in rgba.as_chunks_mut::<4>().0 {
                 p.swap(0, 2);
             }
-            let key = format!("{}|{label}|{}", entry.id, self.project.find(entry).map_or(0, |s| s.dds.len()));
-            Picture { handle: ctx.load_texture(key.clone(), egui::ColorImage::from_rgba_unmultiplied(size, &rgba), TextureOptions::LINEAR), pixels, key }
+            let name = format!("{}|{label}", entry.id);
+            let handle = ctx.load_texture(name.clone(), egui::ColorImage::from_rgba_unmultiplied(size, &rgba), TextureOptions::LINEAR);
+            let key = format!("{name}|{:?}", handle.id());
+            Picture { handle, pixels, key }
         };
         let original = result.original.map(|p| picture(p, "original"));
         let replacement = result.replacement.map(|p| picture(p, "replacement"));
@@ -526,11 +541,10 @@ impl Workbench {
             info: result.info,
             original,
             replacement,
-            conversion: result.conversion,
+            confirmed: result.confirmed,
             details: result.details,
             edit_details: result.edit_details,
             staged,
-            pool,
         });
         if reveal {
             self.show_replacement = true;
@@ -554,37 +568,29 @@ impl Workbench {
         let (Some(texture), Some(catalog)) = (self.texture, self.catalog.clone()) else { return };
         if self.project.revert(&catalog.assets[texture]) {
             self.load_texture(Some(texture));
-            self.status = "Original texture restored.".into();
+            self.status = "Pending replacement discarded.".into();
         }
     }
 
-    fn convert_for_pool(&mut self, ctx: &egui::Context) {
-        let (Some(texture), Some(catalog)) = (self.texture, self.catalog.clone()) else { return };
-        let Some(stage) = self.project.find(&catalog.assets[texture]).cloned() else { return };
-        let Some(plan) = self.preview.as_ref().and_then(|p| p.conversion.clone()) else { return };
-        let details = format!("Imported DDS\n{}\n\nExport DDS\n{}", plan.input, plan.output);
-        if let Some(limitation) = &plan.limitation {
-            inform("Convert for TTPF export", &format!("{details}\n\n{limitation}\nThe imported DDS remains staged."));
-            return;
-        }
-        let warnings = if plan.warnings.is_empty() { String::new() } else { format!("\n\n{}", plan.warnings.join("\n")) };
-        let consent = if plan.requires_resize { "Resize the export copy to the pool dimensions?" } else { "Export this DDS?" };
-        if !ask("Convert for TTPF export", &format!("{details}{warnings}\n\n{consent}")) {
-            return;
-        }
-        let stem = Path::new(&stage.original_file_name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let Some(path) = FileDialog::new()
-            .set_title("Export compatible DDS")
-            .add_filter("DirectDraw surface", &["dds"])
-            .set_file_name(format!("{stem}-ttpf.dds"))
-            .save_file()
-        else {
-            return;
-        };
-        self.run(ctx, "Preparing DDS…", move |_| {
-            let bytes = texture_conversion::apply(&stage.dds, &plan, plan.requires_resize)?;
-            files::write_bytes(&path, &bytes, false)?;
-            Ok(Done::Status(format!("Exported {}. The staged preview remains available.", file_name(&path.to_string_lossy()))))
+    fn confirm_replacement(&mut self, ctx: &egui::Context) {
+        let (Some(asset), Some(catalog)) = (self.texture, self.catalog.clone()) else { return };
+        let Some(stage) = self.project.find(&catalog.assets[asset]).cloned() else { return };
+        let material = self.model.as_ref().zip(self.material).map(|(model, shader)| (model.asset, shader));
+        self.run(ctx, "Saving texture replacement…", move |cancel| {
+            let entry = &catalog.assets[asset];
+            let source = catalog.source_of(entry)?;
+            let mut file = source.open()?;
+            source.fingerprint.check(source.path(), &mut file, false)?;
+            dds::decode_texture_pixels(&stage.dds, 0)?;
+            let path = confirmed_texture_path(&catalog, entry)?;
+            cancel.check()?;
+            write_confirmed(&path, &stage.dds)?;
+            if let Some((model, shader)) = material {
+                let binding = material_texture_path(&catalog, &catalog.assets[model], shader)?;
+                let file_name = path.file_name().ok_or_else(|| Error::io("Replacement has no file name."))?;
+                write_confirmed(&binding, file_name.to_string_lossy().as_bytes())?;
+            }
+            Ok(Done::Confirmed { asset })
         });
     }
 
@@ -744,6 +750,15 @@ impl Workbench {
         match done {
             Done::Workspace(catalog, folder) => self.set_workspace(catalog, folder),
             Done::Status(text) => self.status = text,
+            Done::Confirmed { asset } => {
+                if let Some(catalog) = &self.catalog {
+                    self.project.revert(&catalog.assets[asset]);
+                }
+                if self.texture == Some(asset) {
+                    self.load_texture(Some(asset));
+                }
+                self.status = "Texture replacement saved.".into();
+            }
             Done::Batch { exported, total, failures } => {
                 self.status = format!("Exported {exported} of {total} assets.");
                 if !failures.is_empty() {
@@ -806,9 +821,28 @@ fn fit_pixels(pixels: &Pixels, max_side: usize) -> Pixels {
     current
 }
 
-fn read_preview(catalog: &Catalog, asset: usize, stage: Option<&StagedTexture>, pool: bool, cancel: &Cancel) -> TexturePreview {
+fn confirmed_texture_path(catalog: &Catalog, entry: &Asset) -> Result<PathBuf> {
+    let source = catalog.source_of(entry)?;
+    let directory = source.path().parent().ok_or_else(|| Error::io("Source has no parent folder."))?;
+    let file_name = source.path().file_name().ok_or_else(|| Error::io("Source has no file name."))?;
+    let locator = entry.id.strip_prefix(&source.id).and_then(|tail| tail.strip_prefix(':')).unwrap_or(&entry.id);
+    let key = format!("{}|{}|{locator}", file_name.to_string_lossy(), source.fingerprint.sha256);
+    Ok(directory.join(".vicemodvi-textures").join(format!("{}.dds", vicemodvi_core::util::sha256_hex(key.as_bytes()))))
+}
+
+fn material_texture_path(catalog: &Catalog, model: &Asset, shader: i32) -> Result<PathBuf> {
+    Ok(confirmed_texture_path(catalog, model)?.with_extension(format!("{shader}.binding")))
+}
+
+fn write_confirmed(path: &Path, bytes: &[u8]) -> Result<()> {
+    let directory = path.parent().ok_or_else(|| Error::io("Replacement has no parent folder."))?;
+    std::fs::create_dir_all(directory)?;
+    files::write_bytes(path, bytes, true)
+}
+
+fn read_preview(catalog: &Catalog, asset: usize, stage: Option<&StagedTexture>, cancel: &Cancel) -> TexturePreview {
     let entry = &catalog.assets[asset];
-    let mut preview = TexturePreview { info: None, original: None, replacement: None, conversion: None, details: String::new(), edit_details: String::new() };
+    let mut preview = TexturePreview { info: None, original: None, replacement: None, confirmed: false, details: String::new(), edit_details: String::new() };
     let read = xbox_assets::read_texture(catalog, entry, cancel).and_then(|(bytes, export)| Ok((dds::decode_texture_pixels(&bytes, 0)?, export)));
     match read {
         Ok((pixels, export)) => {
@@ -824,6 +858,22 @@ fn read_preview(catalog: &Catalog, asset: usize, stage: Option<&StagedTexture>, 
     if cancel.is_cancelled() {
         return preview;
     }
+    let saved = confirmed_texture_path(catalog, entry)
+        .and_then(|path| std::fs::read(path).or_else(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound { Ok(Vec::new()) } else { Err(error) }
+        }).map_err(Error::from));
+    match saved {
+        Ok(bytes) if !bytes.is_empty() => match dds::decode_texture_pixels(&bytes, 0) {
+            Ok(pixels) => {
+                preview.original = Some(pixels);
+                preview.confirmed = true;
+                preview.details.push_str("\nSaved replacement applied.");
+            }
+            Err(error) => preview.details.push_str(&format!("\nSaved replacement unavailable: {error}")),
+        },
+        Err(error) => preview.details.push_str(&format!("\nSaved replacement unavailable: {error}")),
+        _ => {}
+    }
     if let Some(stage) = stage {
         match dds::inspect(&stage.dds) {
             Ok(info) => {
@@ -838,17 +888,7 @@ fn read_preview(catalog: &Catalog, asset: usize, stage: Option<&StagedTexture>, 
             }
             Err(error) => preview.edit_details.push_str(&format!("\nPreview unavailable. {error}")),
         }
-        if pool && !cancel.is_cancelled() {
-            match pool_writer::plan(catalog, entry, &stage.dds, cancel) {
-                Ok(plan) => {
-                    if let Some(limitation) = &plan.limitation {
-                        preview.edit_details.push_str(&format!("\n{limitation}"));
-                    }
-                    preview.conversion = Some(plan);
-                }
-                Err(error) => preview.edit_details.push_str(&format!("\n{error}")),
-            }
-        }
+
     }
     preview
 }
@@ -1080,7 +1120,8 @@ impl Workbench {
                 let controls = Rect::from_min_max(egui::pos2(area.left(), area.bottom() + 12.0), ui.max_rect().max);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(controls), |ui| {
                     ui.horizontal(|ui| {
-                        ui.radio_value(&mut self.show_replacement, false, "Original");
+                        let baseline = if self.preview.as_ref().is_some_and(|p| p.confirmed) { "Saved" } else { "Original" };
+                        ui.radio_value(&mut self.show_replacement, false, baseline);
                         ui.add_space(12.0);
                         ui.radio_value(&mut self.show_replacement, true, "Replacement");
                     });
@@ -1095,7 +1136,7 @@ impl Workbench {
         if let (Some((loaded, index)), Some(state), Some(viewer)) = (mesh, frame.wgpu_render_state(), self.viewer.as_mut()) {
             let mesh = &loaded.model.meshes[index];
             let white = loaded.links.iter().find(|l| Some(l.shader) == mesh.shader_index).and_then(|l| l.name_hash.as_deref()) == Some(WHITE_DIFFUSE);
-            let colors = white && !self.show_replacement && mesh.vertex_colors.as_ref().is_some_and(|c| c.len() == mesh.positions.len());
+            let colors = white && !self.show_replacement && !self.preview.as_ref().is_some_and(|p| p.confirmed) && mesh.vertex_colors.as_ref().is_some_and(|c| c.len() == mesh.positions.len());
             let has_uv = mesh.tex_coords.as_ref().is_some_and(|uv| uv.len() == mesh.positions.len());
             let key = format!("{}#{index}", loaded.asset);
             viewer.set_mesh(state, &key, mesh, colors);
@@ -1204,7 +1245,7 @@ impl Workbench {
             if let Some(index) = self.mesh {
                 let mesh = &loaded.model.meshes[index];
                 let white = loaded.links.iter().find(|l| Some(l.shader) == mesh.shader_index).and_then(|l| l.name_hash.as_deref()) == Some(WHITE_DIFFUSE);
-                if white && !self.show_replacement && mesh.vertex_colors.as_ref().is_some_and(|c| c.len() == mesh.positions.len()) {
+                if white && !self.show_replacement && !self.preview.as_ref().is_some_and(|p| p.confirmed) && mesh.vertex_colors.as_ref().is_some_and(|c| c.len() == mesh.positions.len()) {
                     ui.label(small("Preview uses vertex colors with the white diffuse."));
                 }
             }
@@ -1251,11 +1292,11 @@ impl Workbench {
             }
             if preview.staged {
                 ui.label(small(&preview.edit_details).color(theme::MUTED));
-                if preview.pool && ui.add_enabled(preview.conversion.is_some(), wide("Convert for TTPF export…")).clicked() {
+                if ui.add_enabled(self.busy.is_none() && preview.replacement.is_some(), wide("Confirm")).clicked() {
                     let ctx = ctx.clone();
-                    action = Some(Box::new(move |s: &mut Self| s.convert_for_pool(&ctx)));
+                    action = Some(Box::new(move |s: &mut Self| s.confirm_replacement(&ctx)));
                 }
-                if ui.add(wide("Revert replacement")).clicked() {
+                if ui.add_enabled(self.busy.is_none(), wide("Revert replacement")).clicked() {
                     action = Some(Box::new(|s: &mut Self| s.revert_replacement()));
                 }
             }

@@ -48,10 +48,10 @@ PS5 and PC game assets still need their own format profiles and platform tests.
 
 | Step | What ViceModVI does |
 | --- | --- |
-| **Open** | Use **Open file** for one `.rpf` or `.ttpf`, or **Open folder** to catalog both types together. The viewer loads vicemodvi-catalog.json from the root when present. The JSON must reference the local asset paths. The viewer reuses cached source indexes when the file size, timestamp, and sampled bytes still match. |
+| **Open** | Use **Open file** for one `.rpf` or `.ttpf`, or **Open folder** to catalog both types together. The viewer loads vicemodvi-catalog.json from the root when present. If the installation folder was moved or renamed, the viewer resolves the catalog paths under the selected folder and checks the source fingerprints. The viewer reuses cached source indexes when the file size, timestamp, and sampled bytes still match. |
 | **Trace** | Select a mesh and material. When the viewer confirms a diffuse texture by its native key, **View linked texture** jumps to that entry, including in another open archive or pool. The catalog keeps source locators and distinguishes recovered names from aliases. |
 | **Preview and export** | Inspect the texture and its available mips or preview a static model with its resolved diffuse image. The inspector can select a texture candidate and export OBJ, DDS, or a transparent PNG of the selected mesh UVs. Right-click for more export options. DDS retains the available format and mips, PNG saves the decoded image, and OBJ includes geometry and available UVs. |
-| **Edit a texture** | Use **Import replacement…** to import an image and toggle **Original** and **Replacement**. Edits stay in the session. Export a DDS to keep a file, or revert the staged edit. Use the CLI when you need a verified archive copy. |
+| **Edit a texture** | Use **Import replacement…** to import an image and toggle **Original** and **Replacement**. Select **Confirm** to save the texture for future previews, or **Revert replacement** to discard the pending edit. Saved replacements live in `.vicemodvi-textures` beside the source archives. Use the CLI when you need a verified archive copy. |
 
 ### Data limitations
 
@@ -131,7 +131,7 @@ The expected SHA-256 of `core_restofworld.rpf` is
    export them into one folder.
 3. Choose **Import replacement…** in the inspector. Toggle
    **Original** and **Replacement** to compare the image in the texture
-   preview or on the mesh. Choose **Export staged DDS** to keep the edit as
+   preview or on the mesh. Choose **Confirm** to use it the next time you open the model. **Export staged DDS** saves a separate copy as
    a file, or **Revert replacement** to clear it.
 
 Supported DDS files are staged byte for byte. Raster imports become a one-mip

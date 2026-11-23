@@ -329,6 +329,40 @@ impl Catalog {
         Ok(catalog)
     }
 
+    /// Opens the catalog against the selected installation, even if it was moved.
+    pub fn load_for_folder(path: &Path, folder: &Path, cancel: &Cancel) -> Result<Self> {
+        let mut catalog = Self::load(path)?;
+        let Some(first) = catalog.sources.first() else {
+            return Ok(catalog);
+        };
+        let old_root = first.path().ancestors().skip(1)
+            .find(|root| catalog.sources.iter().all(|source| source.path().starts_with(root)))
+            .ok_or_else(|| Error::invalid("Catalog sources do not share an installation folder."))?
+            .to_path_buf();
+
+        for source in &mut catalog.sources {
+            cancel.check()?;
+            let original = source.path();
+            if original.starts_with(folder) {
+                continue;
+            }
+            let relative = original.strip_prefix(&old_root)
+                .map_err(|_| Error::invalid("Source is outside the catalog installation folder."))?;
+            if !relative.components().all(|part| matches!(part, std::path::Component::Normal(_)))
+                || relative.as_os_str().is_empty()
+            {
+                return Err(Error::invalid("Invalid relative path in the catalog."));
+            }
+            let relocated = folder.join(relative);
+            let mut file = File::open(&relocated).map_err(|error| {
+                Error::invalid(format!("Cannot relocate catalog source {}: {error}", relocated.display()))
+            })?;
+            source.fingerprint.check(&relocated, &mut file, false)?;
+            source.path = path_text(&relocated);
+        }
+        Ok(catalog)
+    }
+
     pub fn save(&mut self, path: &Path, replace: bool) -> Result<()> {
         let target = path_text(&full_path(path)?);
         if self.sources.iter().any(|s| eq_ignore_case(&s.path, &target)) {
