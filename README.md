@@ -277,4 +277,3 @@ SHA-256. The copy preserves the archive size and directory bytes.
 ViceModVI's own code is released under the [GNU GPL v3 or later](LICENSE)
 (`GPL-3.0-or-later`). Game files retain their respective rights.
 
-During development, we used tools and inventory output from [Leonida](https://github.com/ItsNotRexed/Leonida), a project licensed under GNU GPL v3, to help locate certain resources within game archives. ViceModVI does not include the game files or an installation catalog.
