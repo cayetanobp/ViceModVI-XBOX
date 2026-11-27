@@ -26,7 +26,7 @@ fn decoded_view(ctx: &egui::Context, index: usize, asset: &Asset) -> TextureView
 }
 
 #[test]
-fn inspecting_a_technical_map_preserves_the_diffuse_until_debug_is_enabled() {
+fn selecting_a_technical_map_applies_it_to_the_mesh() {
     const DIFFUSE: usize = 1;
     const NORMAL: usize = 2;
     let ctx = egui::Context::default();
@@ -76,16 +76,9 @@ fn inspecting_a_technical_map_preserves_the_diffuse_until_debug_is_enabled() {
     app.texture_views.insert(NORMAL, decoded_view(&ctx, NORMAL, &normal));
     app.select_map(Some(MapChoice { reference: 1, candidate: Some(0) }));
     assert_eq!(app.inspected_preview().map(|preview| preview.asset), Some(NORMAL));
-    assert_eq!(app.mesh_surface(), (Surface::Texture, Some(DIFFUSE)));
-
-    app.debug_map = true;
     assert_eq!(app.mesh_surface(), (Surface::DebugTexture, Some(NORMAL)));
-    app.debug_map = false;
-    assert_eq!(app.mesh_surface(), (Surface::Texture, Some(DIFFUSE)));
 
-    app.debug_map = true;
     app.select_map(None);
-    assert!(!app.debug_map);
     assert_eq!(app.inspected_preview().map(|preview| preview.asset), Some(DIFFUSE));
     assert_eq!(app.mesh_surface(), (Surface::Texture, Some(DIFFUSE)));
 }

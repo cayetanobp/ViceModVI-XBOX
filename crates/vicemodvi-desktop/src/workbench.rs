@@ -159,7 +159,6 @@ pub struct Workbench {
     material: Option<i32>,
     map_choice: Option<MapChoice>,
     map_choices: HashMap<i32, MapChoice>,
-    debug_map: bool,
 
     /// The inspected asset and confirmed mesh diffuse can share one preview.
     texture: Option<usize>,
@@ -241,7 +240,6 @@ impl Workbench {
             material: None,
             map_choice: None,
             map_choices: HashMap::new(),
-            debug_map: false,
             texture: None,
             diffuse_texture: None,
             texture_views: HashMap::new(),
@@ -430,7 +428,6 @@ impl Workbench {
         self.mesh = None;
         self.material = None;
         self.map_choice = None;
-        self.debug_map = false;
         let inspected = asset.filter(|&asset| self.catalog.as_ref().is_some_and(|catalog| catalog.assets[asset].kind == "texture"));
         self.set_preview_textures(inspected, None);
         let (Some(asset), Some(catalog), Some(index)) = (asset, self.catalog.clone(), self.index.clone()) else { return };
@@ -520,7 +517,6 @@ impl Workbench {
 
     fn refresh_map(&mut self) {
         self.map_choice = self.material.and_then(|shader| self.map_choices.get(&shader).copied()).or_else(|| self.default_map());
-        self.debug_map = false;
         let inspected = self.selected_map().and_then(|(_, candidate)| candidate)
             .and_then(|candidate| self.catalog.as_ref()?.position(&candidate.asset_id));
         let diffuse = self.preferred_color_map().and_then(|(_, map)| map.verified_color_id())
@@ -547,7 +543,7 @@ impl Workbench {
         let Some((loaded, index)) = self.model.as_ref().zip(self.mesh) else { return (Surface::Plain, None) };
         let mesh = &loaded.model.meshes[index];
         let has_uv = mesh.tex_coords.as_ref().is_some_and(|uv| !uv.is_empty() && uv.len() == mesh.positions.len());
-        if has_uv && self.debug_map && !self.shows_verified_color() && self.inspected_preview().and_then(Preview::picture).is_some() {
+        if has_uv && !self.shows_verified_color() && self.inspected_preview().and_then(Preview::picture).is_some() {
             return (Surface::DebugTexture, self.texture);
         }
         let diffuse = self.diffuse_texture.and_then(|asset| self.texture_views.get(&asset)).and_then(TextureView::preview);
@@ -1363,7 +1359,6 @@ impl Workbench {
                             let scale = (full / size.x).min(140.0 / size.y).min(1.0);
                             ui.image((thumbnail.id(), size * scale)).on_hover_text("RGB channels");
                         }
-                        ui.add_enabled(uv && picture.is_some(), egui::Checkbox::new(&mut self.debug_map, "Debug preview on mesh"));
                     }
                     if ui.add(wide("View linked texture")).clicked() {
                         action = Some(Box::new(|s: &mut Self| s.view_linked_texture()));
