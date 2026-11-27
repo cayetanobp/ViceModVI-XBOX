@@ -39,6 +39,8 @@ Start with an exported mesh. Use material references and check embedded textures
 
 **Evidence.** Shader 1 on `0:model:203F010` uses `diffusetex` (parameter `C8E8C282`). Its 64-bit key `6B455BAEAE3DA9F4` matches entry 90 in `ttdb_props.ttpf`. Across 101 recognized color references, 23 were confirmed, zero ambiguous, and 78 unresolved. Adding a local duplicate of the props pool returned two candidates for the reference shader and left its selected texture empty. See [sample commands](README.md#reproduce-the-sample).
 
+**Shader map inspection.** The desktop inspector reports the parameter role, native reference resolution, and decoding result for the selected map. Selecting another reference applies it to the mesh; **Default material preview** restores the confirmed diffuse texture. The `E68A4A98` weapon shader has no verified color reconstruction, so its material preview is neutral. The mesh preview of such a map displays its RGB and identifies its parameter and source entry. The inspector marks the roles of `bumptex`, `speculartex`, and `speculartex2` as inferred from measurements on Xbox map and character materials. [Leonida texture measurements](https://github.com/ItsNotRexed/Leonida/blob/dde82f27e994337094afc476ded0b1426f6e87e2/docs/textures.md#map-material-texture-parameters)
+
 ## MF-04 · Viewer and local project
 
 Show the catalog, texture preview, mesh and material selection, and per-entry export. Accept a replacement and report differences in dimensions, format, and mips as applicable. Support before-and-after comparison and save the state outside the source file. Record the identity of the replaced entry.
