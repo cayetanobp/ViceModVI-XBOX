@@ -73,6 +73,8 @@ An Xbox writer needs the verified member and directory layouts, offsets and leng
 
 **Offline copy evidence.** A no-change round trip reproduced the 1,295,760,752-byte archive's original SHA-256. A one-pixel edit of `0:dictionary:680010:texture:0` changed one segment at `0x6800B0` and preserved its 36-byte packed length. The output SHA-256 was `17D09D966D0E4DAC63C2865BBEEC56EFBC4C25D362758814D1FAAAA0BF50B180`. The reopened dictionary matched the replacement DDS and its neighbor, and bytes outside that segment matched throughout the copy. Rebuilding the catalog of the copy re-exported the exact DDS. A DDS requiring a different packed length was rejected without producing a copy. [RPF9 copy commands](README.md#experimental-rpf9-copy)
 
+**Distribution layout (2026-11-28).** Confirmed replacements now install into `<game>/mods/`, and the original files are never written. `files/<game path>` holds the patched TTPF or RPF9 copy, rebuilt from the original with every replacement for that archive. `textures/` holds the replacement DDS files and `vicemodvi-mods.json` records the originals' SHA-256. Deleting the folder reverts every mod. `tests/mods.rs` covers stacking, removal, refused writes leaving nothing behind, and unchanged originals on synthetic files. A runtime that loads `mods/files/<game path>` in place of the original is still needed, and so is the in-game test. [Mods folder](README.md#mods-folder)
+
 | Platform | Build | Compatibility |
 | --- | --- | --- |
 | Xbox Series | 1.0.2.1 | Fixed-size dictionary copy verified offline. Loading and reverting in the game are pending |

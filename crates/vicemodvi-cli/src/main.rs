@@ -11,7 +11,9 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use vicemodvi_core::{
     catalog::Catalog,
-    dds, files, manifests, obj, pool_writer, rpf_copy,
+    dds, files, manifests,
+    mods::Mods,
+    obj, pool_writer, rpf_copy,
     texture_conversion,
     texture_links::{self, TextureIndex},
     util::{eq_ignore_case, full_path, parse_number, path_text},
@@ -31,6 +33,9 @@ resolve CATALOG [MODEL_ID]
 convert-for-ttpf CATALOG TEXTURE_ID IMAGE OUTPUT_DDS [--resize]
 write-pool-copy CATALOG TEXTURE_ID IMAGE OUTPUT_TTPF [--resize] [--overwrite]
 write-rpf-copy CATALOG TEXTURE_ID IMAGE OUTPUT_RPF [--resize]
+install-mod CATALOG TEXTURE_ID IMAGE [--resize] [--game GAME_FOLDER]
+uninstall-mod CATALOG TEXTURE_ID [--game GAME_FOLDER]
+list-mods GAME_FOLDER
 pool-profiles CATALOG SOURCE_ID";
 
 enum Outcome {
@@ -63,6 +68,34 @@ fn print(value: &impl Serialize) -> Result<()> {
 
 fn path(value: &str) -> &Path {
     Path::new(value)
+}
+
+/// `[--resize] [--game GAME_FOLDER]` in any order.
+fn mod_options<'a>(options: &[&'a str], resize_allowed: bool) -> Result<(bool, Option<&'a str>)> {
+    let (mut resize, mut game) = (false, None);
+    let mut rest = options;
+    while let [option, tail @ ..] = rest {
+        match (*option, tail) {
+            ("--resize", _) if resize_allowed && !resize => {
+                resize = true;
+                rest = tail;
+            }
+            ("--game", [folder, tail @ ..]) if game.is_none() => {
+                game = Some(*folder);
+                rest = tail;
+            }
+            _ => return Err(Error::argument(format!("Unsupported mod option {option}."))),
+        }
+    }
+    Ok((resize, game))
+}
+
+/// The mods folder of the game that holds the source of `asset`.
+fn mods_for(catalog: &Catalog, asset: &vicemodvi_core::Asset, game: Option<&str>) -> Result<Mods> {
+    match game {
+        Some(folder) => Mods::new(path(folder)),
+        None => Mods::for_source(catalog.source_of(asset)?, None),
+    }
 }
 
 fn run(args: &[&str]) -> Result<Outcome> {
@@ -212,6 +245,22 @@ fn run(args: &[&str]) -> Result<Outcome> {
             let dds_bytes = texture_conversion::import(path(input))?;
             print(&rpf_copy::copy(&catalog, catalog.get(id)?, &dds_bytes, path(output), options.len() == 1, &none)?)?;
         }
+        ["install-mod", file, id, input, options @ ..] => {
+            let (resize, game) = mod_options(options, true)?;
+            let catalog = Catalog::load(path(file))?;
+            let asset = catalog.get(id)?;
+            let mods = mods_for(&catalog, asset, game)?;
+            let dds_bytes = texture_conversion::import(path(input))?;
+            print(&mods.install(&catalog, asset, &dds_bytes, resize, &none)?)?;
+        }
+        ["uninstall-mod", file, id, options @ ..] => {
+            let (_, game) = mod_options(options, false)?;
+            let catalog = Catalog::load(path(file))?;
+            let asset = catalog.get(id)?;
+            let mods = mods_for(&catalog, asset, game)?;
+            print(&json!({ "removed": mods.uninstall(&catalog, asset, &none)? }))?;
+        }
+        ["list-mods", game] => print(&Mods::new(path(game))?.manifest()?)?,
         ["pool-profiles", file, source_id] => {
             let catalog = Catalog::load(path(file))?;
             let source = catalog

@@ -13,6 +13,7 @@ use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, Messag
 use vicemodvi_core::{
     catalog::group_digits,
     dds, files,
+    mods::Mods,
     project::{ReplacementProject, StagedTexture},
     texture_conversion::{self, TextureShape, IMAGE_EXTENSIONS},
     texture_links::{self, LinkCandidate, MapRole, MaterialMap, TextureIndex},
@@ -43,7 +44,8 @@ const WHITE_DIFFUSE: &str = "0000000082079169";
 enum Done {
     Workspace(Catalog, Option<PathBuf>),
     Staged { asset: usize, path: PathBuf, dds: Vec<u8> },
-    Confirmed { asset: usize },
+    Confirmed { asset: usize, copy: String },
+    Removed { asset: usize },
     Status(String),
     Batch { exported: usize, total: usize, failures: Vec<String> },
 }
@@ -135,6 +137,9 @@ impl TextureView {
 
 pub struct Workbench {
     catalog: Option<Arc<Catalog>>,
+    /// The opened folder. It locates the mods folder when the sources carry
+    /// no game executable or manifest.
+    workspace: Option<PathBuf>,
     index: Option<Arc<TextureIndex>>,
     project: ReplacementProject,
     tree: Option<Tree>,
@@ -217,6 +222,7 @@ impl Workbench {
         });
         Self {
             catalog: None,
+            workspace: None,
             index: None,
             project: ReplacementProject::new(),
             tree: None,
@@ -313,6 +319,7 @@ impl Workbench {
         self.selected.clear();
         self.anchor = None;
         let (tree, rows) = browse::build(&catalog, folder.as_deref());
+        self.workspace = folder;
         let ranges = catalog.assets.iter().filter(|a| a.kind == "unknown").count() as i64;
         let models = catalog.assets.iter().filter(|a| a.kind == "model").count() as i64;
         let identified = catalog.assets.len() as i64 - ranges;
@@ -580,7 +587,8 @@ impl Workbench {
     fn reload_texture(&mut self, asset: usize, reveal_replacement: bool) {
         let Some(catalog) = self.catalog.clone() else { return };
         let stage = self.project.find(&catalog.assets[asset]).cloned();
-        let job = Job::spawn(&self.ctx, move |cancel| read_preview(&catalog, asset, stage.as_ref(), cancel));
+        let workspace = self.workspace.clone();
+        let job = Job::spawn(&self.ctx, move |cancel| read_preview(&catalog, asset, stage.as_ref(), workspace.as_deref(), cancel));
         if let Some(old) = self.texture_views.insert(asset, TextureView::Loading { job, reveal_replacement }) {
             old.cancel();
         }
@@ -636,19 +644,47 @@ impl Workbench {
         }
     }
 
+    /// Installs the staged texture in the game's mods folder: the replacement
+    /// and a patched copy of its archive. The original game file is not written.
     fn confirm_replacement(&mut self, ctx: &egui::Context) {
         let (Some(asset), Some(catalog)) = (self.texture, self.catalog.clone()) else { return };
         let Some(stage) = self.project.find(&catalog.assets[asset]).cloned() else { return };
-        self.run(ctx, "Saving texture replacement…", move |cancel| {
+        let original = self.texture_views.get(&asset).and_then(TextureView::preview).and_then(|p| p.info.as_ref());
+        let mut allow_resize = false;
+        if let (Some(original), Ok(staged)) = (original, dds::inspect(&stage.dds)) {
+            if (original.source_width, original.source_height) != (staged.width, staged.height) {
+                let question = format!(
+                    "The game texture is {} × {} and the replacement is {} × {}. Resize the replacement to {} × {} for the game?",
+                    original.source_width, original.source_height, staged.width, staged.height, original.source_width, original.source_height
+                );
+                if !ask("Resize replacement", &question) {
+                    self.status = "Replacement not saved. The game needs the original dimensions.".into();
+                    return;
+                }
+                allow_resize = true;
+            }
+        }
+        let workspace = self.workspace.clone();
+        self.run(ctx, "Building the modded game file in the mods folder…", move |cancel| {
             let entry = &catalog.assets[asset];
-            let source = catalog.source_of(entry)?;
-            let mut file = source.open()?;
-            source.fingerprint.check(source.path(), &mut file, false)?;
-            dds::decode_texture_pixels(&stage.dds, 0)?;
-            let path = confirmed_texture_path(&catalog, entry)?;
-            cancel.check()?;
-            write_confirmed(&path, &stage.dds)?;
-            Ok(Done::Confirmed { asset })
+            let mods = Mods::for_source(catalog.source_of(entry)?, workspace.as_deref())?;
+            let installed = mods.install(&catalog, entry, &stage.dds, allow_resize, cancel)?;
+            Ok(Done::Confirmed { asset, copy: installed.copy })
+        });
+    }
+
+    /// Uninstalls the saved replacement of the inspected texture from the mods folder.
+    fn remove_saved_replacement(&mut self, ctx: &egui::Context) {
+        let (Some(asset), Some(catalog)) = (self.texture, self.catalog.clone()) else { return };
+        if !ask("ViceModVI", "Remove this saved replacement from the mods folder? The game file copy is rebuilt without it.") {
+            return;
+        }
+        let workspace = self.workspace.clone();
+        self.run(ctx, "Removing the replacement from the mods folder…", move |cancel| {
+            let entry = &catalog.assets[asset];
+            let mods = Mods::for_source(catalog.source_of(entry)?, workspace.as_deref())?;
+            mods.uninstall(&catalog, entry, cancel)?;
+            Ok(Done::Removed { asset })
         });
     }
 
@@ -808,14 +844,20 @@ impl Workbench {
         match done {
             Done::Workspace(catalog, folder) => self.set_workspace(catalog, folder),
             Done::Status(text) => self.status = text,
-            Done::Confirmed { asset } => {
+            Done::Confirmed { asset, copy } => {
                 if let Some(catalog) = &self.catalog {
                     self.project.revert(&catalog.assets[asset]);
                 }
                 if self.texture_views.contains_key(&asset) {
                     self.reload_texture(asset, false);
                 }
-                self.status = "Texture replacement saved.".into();
+                self.status = format!("Texture replacement saved. Modded game file: {copy}");
+            }
+            Done::Removed { asset } => {
+                if self.texture_views.contains_key(&asset) {
+                    self.reload_texture(asset, false);
+                }
+                self.status = "Saved replacement removed from the mods folder.".into();
             }
             Done::Batch { exported, total, failures } => {
                 self.status = format!("Exported {exported} of {total} assets.");
@@ -883,22 +925,7 @@ fn fit_pixels(pixels: &Pixels, max_side: usize) -> Pixels {
     current
 }
 
-fn confirmed_texture_path(catalog: &Catalog, entry: &Asset) -> Result<PathBuf> {
-    let source = catalog.source_of(entry)?;
-    let directory = source.path().parent().ok_or_else(|| Error::io("Source has no parent folder."))?;
-    let file_name = source.path().file_name().ok_or_else(|| Error::io("Source has no file name."))?;
-    let locator = entry.id.strip_prefix(&source.id).and_then(|tail| tail.strip_prefix(':')).unwrap_or(&entry.id);
-    let key = format!("{}|{}|{locator}", file_name.to_string_lossy(), source.fingerprint.sha256);
-    Ok(directory.join(".vicemodvi-textures").join(format!("{}.dds", vicemodvi_core::util::sha256_hex(key.as_bytes()))))
-}
-
-fn write_confirmed(path: &Path, bytes: &[u8]) -> Result<()> {
-    let directory = path.parent().ok_or_else(|| Error::io("Replacement has no parent folder."))?;
-    std::fs::create_dir_all(directory)?;
-    files::write_bytes(path, bytes, true)
-}
-
-fn read_preview(catalog: &Catalog, asset: usize, stage: Option<&StagedTexture>, cancel: &Cancel) -> TexturePreview {
+fn read_preview(catalog: &Catalog, asset: usize, stage: Option<&StagedTexture>, workspace: Option<&Path>, cancel: &Cancel) -> TexturePreview {
     let entry = &catalog.assets[asset];
     let mut preview = TexturePreview { info: None, original: None, replacement: None, confirmed: false, details: String::new(), edit_details: String::new() };
     let read = xbox_assets::read_texture(catalog, entry, cancel).and_then(|(bytes, export)| Ok((dds::decode_texture_pixels(&bytes, 0)?, export)));
@@ -916,21 +943,18 @@ fn read_preview(catalog: &Catalog, asset: usize, stage: Option<&StagedTexture>, 
     if cancel.is_cancelled() {
         return preview;
     }
-    let saved = confirmed_texture_path(catalog, entry)
-        .and_then(|path| std::fs::read(path).or_else(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound { Ok(Vec::new()) } else { Err(error) }
-        }).map_err(Error::from));
+    let saved = catalog.source_of(entry).and_then(|source| Mods::for_source(source, workspace)).and_then(|mods| mods.saved(catalog, entry));
     match saved {
-        Ok(bytes) if !bytes.is_empty() => match dds::decode_texture_pixels(&bytes, 0) {
+        Ok(Some(bytes)) => match dds::decode_texture_pixels(&bytes, 0) {
             Ok(pixels) => {
                 preview.original = Some(pixels);
                 preview.confirmed = true;
-                preview.details.push_str("\nSaved replacement applied.");
+                preview.details.push_str("\nSaved replacement from the mods folder applied.");
             }
             Err(error) => preview.details.push_str(&format!("\nSaved replacement unavailable: {error}")),
         },
         Err(error) => preview.details.push_str(&format!("\nSaved replacement unavailable: {error}")),
-        _ => {}
+        Ok(None) => {}
     }
     if let Some(stage) = stage {
         match dds::inspect(&stage.dds) {
@@ -1400,6 +1424,9 @@ impl Workbench {
                 if ui.add_enabled(self.busy.is_none(), wide("Revert replacement")).clicked() {
                     action = Some(Box::new(|s: &mut Self| s.revert_replacement()));
                 }
+            } else if preview.confirmed && ui.add_enabled(self.busy.is_none(), wide("Remove saved replacement")).clicked() {
+                let ctx = ctx.clone();
+                action = Some(Box::new(move |s: &mut Self| s.remove_saved_replacement(&ctx)));
             }
             ui.label(small(&preview.details));
         } else if let Some(view) = self.texture.and_then(|asset| self.texture_views.get(&asset)) {

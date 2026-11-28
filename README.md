@@ -35,6 +35,7 @@ in the game and restoring the original are pending.
 | Browse and search | **● Available** | Open a single archive or a folder. Search by name, asset ID, type, source path, hash, or offset. [Catalog evidence](PENDING.md#mf-01--catalog-and-byte-offset-reads) |
 | Preview and export | **● Available** | Preview textures and static meshes. Export DDS or OBJ, save a single texture as PNG, or export a batch. [Viewer evidence](PENDING.md#mf-07--browse-preview-export-and-edit-in-one-place) |
 | Texture replacements | **● Available** | Compare a staged image on the mesh, export the staged DDS, or revert the edit. [Desktop walkthrough](#local-replacement-workflow) |
+| Mods folder | **◐ Experimental** | Confirmed replacements and the patched archive copies go to one `mods` folder in the game folder. The original files are never written. Loading the copies in game needs runtime support. [Mods folder](#mods-folder) |
 | TTPF copies | **● Available** | Replace one texture in a compatible RDS5 pool through the CLI. [TTPF checks](#experimental-ttpf-copy) |
 | RPF9 copies | **● Available** | Replace one 2D texture in a recovered dictionary when the changed segments retain their packed lengths. [RPF9 checks](#experimental-rpf9-copy) |
 | Installation-wide index | **● Available** | Load a saved installation catalog from the game root, browse individual folders, and resolve linked textures across indexed archives. [Details](PENDING.md#mf-08--installation-root-and-incremental-global-index) |
@@ -51,7 +52,7 @@ PS5 and PC game assets still need their own format profiles and platform tests.
 | **Open** | Use **Open file** for one `.rpf` or `.ttpf`, or **Open folder** to catalog both types together. The viewer loads vicemodvi-catalog.json from the root when present. If the installation folder was moved or renamed, the viewer resolves the catalog paths under the selected folder and checks the source fingerprints. The viewer reuses cached source indexes when the file size, timestamp, and sampled bytes still match. |
 | **Trace** | Select a mesh and material. When the viewer confirms a diffuse texture by its native key, **View linked texture** jumps to that entry, including in another open archive or pool. The catalog keeps source locators and distinguishes recovered names from aliases. |
 | **Preview and export** | Inspect the texture and its available mips or preview a static model with its resolved diffuse image. The inspector can select a texture candidate and export OBJ, DDS, or a transparent PNG of the selected mesh UVs. Right-click for more export options. DDS retains the available format and mips, PNG saves the decoded image, and OBJ includes geometry and available UVs. |
-| **Edit a texture** | Use **Import replacement…** to import an image and toggle **Original** and **Replacement**. Select **Confirm** to save the texture for future previews, or **Revert replacement** to discard the pending edit. Saved replacements live in `.vicemodvi-textures` beside the source archives. Use the CLI when you need a verified archive copy. |
+| **Edit a texture** | Use **Import replacement…** to import an image and toggle **Original** and **Replacement**. Select **Confirm** to install the texture in the game's [mods folder](#mods-folder), or **Revert replacement** to discard the pending edit. **Remove saved replacement** uninstalls a confirmed texture. |
 
 ### Data limitations
 
@@ -131,8 +132,10 @@ The expected SHA-256 of `core_restofworld.rpf` is
    export them into one folder.
 3. Choose **Import replacement…** in the inspector. Toggle
    **Original** and **Replacement** to compare the image in the texture
-   preview or on the mesh. Choose **Confirm** to use it the next time you open the model. **Export staged DDS** saves a separate copy as
-   a file, or **Revert replacement** to clear it.
+   preview or on the mesh. Choose **Confirm** to install it in the game's
+   `mods` folder and use it the next time you open the model.
+   **Export staged DDS** saves a separate copy as a file, or
+   **Revert replacement** to clear it.
 
 Supported DDS files are staged byte for byte. Raster imports become a one-mip
 8-bit BGRA DDS: PNG and APNG, JPEG, BMP, GIF, TIFF, TGA, WebP, ICO, QOI,
@@ -194,6 +197,49 @@ the inputs after `$sample` when making a second catalog, and resolve the same
 model against it.
 
 </details>
+
+### Mods folder
+
+ViceModVI never writes the game's original files. **Confirm** saves every
+change to one `mods` folder in the game folder. To remove all mods, delete
+that folder.
+
+```text
+<game>/mods/
+  vicemodvi-mods.json                 installed replacements and the originals they target
+  textures/<game path>/<entry>.dds    the replacement images
+  files/<game path>                   patched archive copies, in the game's own layout
+```
+
+For example, a replacement for entry 1510 of
+`data/ttdb/weapons/ttdb_weapons.ttpf` writes
+`mods/files/data/ttdb/weapons/ttdb_weapons.ttpf`. The copy is rebuilt from
+the untouched original with every replacement for that archive, so
+replacements stack and removing one keeps the others. The copy writers below
+check every copy before it is published. Their limits also apply here: if a
+copy cannot be written, nothing is saved and the mods folder stays as it
+was. The game folder is the nearest folder that contains
+`game_scarlett_master.exe`, `MicrosoftGame.Config` or `appxmanifest.xml`.
+Otherwise the opened folder is used. **Open folder** does not index the
+copies in a mods folder.
+
+To show the mods in game, a runtime must read `mods/files/<game path>` in
+place of `<game path>`. That loading and its in-game test are still pending.
+
+From the CLI, with `$cli`, `$catalog` and `$sample` from the commands below
+and `$edit` from the TTPF copy example. `--resize` allows a replacement with
+other dimensions. Without `--game`, the CLI finds the game folder from the
+files listed above, or uses the archive's folder.
+
+```powershell
+& $cli install-mod $catalog '3:ttpf:4' $edit --game $sample
+& $cli list-mods $sample
+& $cli uninstall-mod $catalog '3:ttpf:4' --game $sample
+```
+
+Replacements saved by earlier builds in `.vicemodvi-textures` folders beside
+the archives are no longer read. Import those DDS files again and confirm
+them to move them to the mods folder.
 
 ### Experimental TTPF copy
 

@@ -560,6 +560,8 @@ pub fn export(catalog: &Catalog, asset: &Asset, output: &Path) -> Result<ExportR
 }
 
 /// Recursively lists RPF and TTPF files in a folder, sorted ignoring case.
+/// The archive copies in a ViceModVI mods folder are not game sources and
+/// are skipped.
 pub fn source_files(folder: &Path) -> Result<Vec<PathBuf>> {
     let mut found = Vec::new();
     let mut pending = vec![folder.to_path_buf()];
@@ -569,7 +571,9 @@ pub fn source_files(folder: &Path) -> Result<Vec<PathBuf>> {
             let kind = entry.file_type()?;
             let path = entry.path();
             if kind.is_dir() {
-                pending.push(path);
+                if !crate::mods::is_mods_folder(&path) {
+                    pending.push(path);
+                }
             } else if matches!(crate::util::extension(&path).as_str(), ".rpf" | ".ttpf") {
                 found.push(path);
             }

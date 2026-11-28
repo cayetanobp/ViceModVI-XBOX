@@ -1,6 +1,6 @@
 //! ViceModVI core: source catalogs, fingerprint checks, the native format
-//! readers, texture conversion, texture links and the experimental TTPF and
-//! RPF9 copy writers.
+//! readers, texture conversion, texture links, the experimental TTPF and
+//! RPF9 copy writers and the game's mods folder.
 
 pub mod cache;
 mod cancel;
@@ -9,6 +9,7 @@ mod drawable_materials;
 pub mod error;
 pub mod files;
 pub mod manifests;
+pub mod mods;
 pub mod native;
 pub mod pool_writer;
 pub mod project;
